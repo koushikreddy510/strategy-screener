@@ -37,12 +37,16 @@ PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f "$DATA_DIR/
 PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f "$DATA_DIR/enrich_symbols.sql" 2>/dev/null || true
 PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f "$DATA_DIR/financials_schema.sql" 2>/dev/null || true
 PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f "$DATA_DIR/commodity_schema.sql" 2>/dev/null || true
-
 # --- Frontend build ---
 echo "Building frontend..."
 cd "$APP_DIR/frontend"
 npm ci --silent 2>/dev/null || npm install --silent
 REACT_APP_API_URL="" npm run build
+
+# --- Update systemd service if changed ---
+echo "Updating systemd service..."
+sudo cp "$APP_DIR/deploy/screener-backend.service" /etc/systemd/system/screener-backend.service
+sudo systemctl daemon-reload
 
 # --- Restart backend ---
 echo "Restarting backend..."

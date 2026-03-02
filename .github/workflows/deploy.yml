@@ -28,9 +28,20 @@ jobs:
             cd /opt/strategy-screener
             sudo -u screener /opt/strategy-screener/venv/bin/pip install -q -r requirements.txt
 
+            echo "=== Running DB migrations ==="
+            PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/schema.sql 2>/dev/null || true
+            PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/ohlc.sql 2>/dev/null || true
+            PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/enrich_symbols.sql 2>/dev/null || true
+            PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/financials_schema.sql 2>/dev/null || true
+            PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/commodity_schema.sql 2>/dev/null || true
+
             echo "=== Building frontend ==="
             cd /opt/strategy-screener/frontend
             sudo -u screener bash -c 'export PATH=/usr/local/bin:$PATH && npm ci --silent 2>/dev/null || npm install --silent && REACT_APP_API_URL="" npm run build'
+
+            echo "=== Updating systemd service ==="
+            sudo cp /opt/strategy-screener/deploy/screener-backend.service /etc/systemd/system/screener-backend.service
+            sudo systemctl daemon-reload
 
             echo "=== Restarting backend ==="
             sudo systemctl restart screener-backend

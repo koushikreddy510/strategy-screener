@@ -265,8 +265,12 @@ def evaluate_condition(cond: dict, df: pd.DataFrame) -> bool:
 
         if operator == ">":
             return float(latest) > float(thresh)
+        if operator == ">=":
+            return float(latest) >= float(thresh)
         if operator == "<":
             return float(latest) < float(thresh)
+        if operator == "<=":
+            return float(latest) <= float(thresh)
         if operator == "==":
             if indicator_type in ("supertrend", "parabolic_sar"):
                 return str(latest) == str(thresh)

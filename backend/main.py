@@ -14,6 +14,13 @@ from financials_engine import (
     get_financials_list, get_symbol_financials, get_financials_summary,
     get_latest_results,
 )
+from data_manager import (
+    get_data_status, sync_symbols, start_ohlcv_update,
+    start_financials_update, start_sector_enrichment,
+    start_latest_results_scrape,
+    get_job_status, get_all_jobs,
+)
+from fyers_token_manager import generate_fyers_token, validate_current_token
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -42,7 +49,9 @@ def get_indicator_metadata():
         "indicators": INDICATOR_METADATA,
         "operators": [
             {"label": ">", "value": ">"},
+            {"label": ">=", "value": ">="},
             {"label": "<", "value": "<"},
+            {"label": "<=", "value": "<="},
             {"label": "==", "value": "=="},
             {"label": "crosses above", "value": "cross_above"},
             {"label": "crosses below", "value": "cross_below"},
@@ -192,7 +201,7 @@ def run_strategy(
     sort_dir: str = "desc",
     cap_filter: Optional[str] = None,
     sector_filter: Optional[str] = None,
-    matched_only: bool = False,
+    matched_only: bool = True,
     db: Session = Depends(get_db),
 ):
     strategy = crud.get_strategy(db, strategy_id)
@@ -326,3 +335,83 @@ def financials_detail(
     result_type: str = "quarterly",
 ):
     return get_symbol_financials(nse_symbol, result_type)
+
+
+# --- Data Management / Admin ---
+
+@app.get("/admin/data-status")
+def admin_data_status():
+    try:
+        return get_data_status()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/admin/sync-symbols")
+def admin_sync_symbols(mode: str = Query("full", pattern="^(full|check)$")):
+    try:
+        return sync_symbols(mode=mode)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/admin/update-ohlcv")
+def admin_update_ohlcv(mode: str = Query("incremental", pattern="^(full|incremental)$")):
+    try:
+        return start_ohlcv_update(mode=mode)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/admin/update-financials")
+def admin_update_financials(
+    mode: str = Query("incremental", pattern="^(full|incremental)$"),
+    limit: int = Query(0, ge=0, le=5000),
+):
+    try:
+        return start_financials_update(mode=mode, limit=limit)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/admin/scrape-latest-results")
+def admin_scrape_latest_results(days: int = Query(7, ge=1, le=90)):
+    try:
+        return start_latest_results_scrape(days=days)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/admin/enrich-sectors")
+def admin_enrich_sectors():
+    try:
+        return start_sector_enrichment()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/admin/job/{job_id}")
+def admin_job_status(job_id: str):
+    return get_job_status(job_id)
+
+
+@app.get("/admin/jobs")
+def admin_all_jobs():
+    return get_all_jobs()
+
+
+@app.post("/admin/fyers-token/generate")
+def admin_generate_fyers_token():
+    try:
+        return generate_fyers_token()
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+@app.get("/admin/fyers-token/validate")
+def admin_validate_fyers_token():
+    try:
+        return validate_current_token()
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+

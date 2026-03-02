@@ -10,3 +10,4 @@ requests
 beautifulsoup4
 psycopg[binary]
 fyers-apiv3
+certifi

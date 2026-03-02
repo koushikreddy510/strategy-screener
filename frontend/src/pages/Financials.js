@@ -443,11 +443,8 @@ export default function Financials() {
             }}>
               <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📊</div>
               <p style={{ color: '#64748b', margin: 0, fontSize: '0.9rem' }}>
-                No financial data yet. Run the scraper first:
+                No financial data yet. Go to the <a href="/admin" style={{ color: '#818cf8', textDecoration: 'underline' }}>Admin</a> page and run the Financial Results scraper.
               </p>
-              <code style={{ display: 'block', marginTop: '0.75rem', padding: '0.5rem', background: '#0f172a', borderRadius: '6px', color: '#818cf8', fontSize: '0.8rem' }}>
-                cd data-store && python scrape_financials.py --limit 50
-              </code>
             </div>
           ) : (
             <>

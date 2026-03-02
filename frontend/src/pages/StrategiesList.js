@@ -7,7 +7,7 @@ function ConditionSummary({ condition }) {
   const threshold = typeof condition.threshold === 'string' ? JSON.parse(condition.threshold) : (condition.threshold || {});
   const paramStr = Object.entries(params).map(([, v]) => v).join(', ');
   const threshStr = threshold.value != null ? threshold.value : threshold.field || '';
-  const opMap = { '>': '>', '<': '<', '==': '=', 'cross_above': '↗', 'cross_below': '↘' };
+  const opMap = { '>': '>', '>=': '≥', '<': '<', '<=': '≤', '==': '=', 'cross_above': '↗', 'cross_below': '↘' };
 
   return (
     <span style={{

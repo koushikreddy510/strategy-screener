@@ -194,7 +194,7 @@ function ConditionPill({ condition }) {
   const threshold = typeof condition.threshold === 'string' ? JSON.parse(condition.threshold) : (condition.threshold || {});
   const paramStr = Object.entries(params).map(([k, v]) => `${k}=${v}`).join(', ');
   const threshStr = threshold.value != null ? threshold.value : threshold.field || '';
-  const opMap = { '>': '>', '<': '<', '==': '=', 'cross_above': '↗ crosses above', 'cross_below': '↘ crosses below' };
+  const opMap = { '>': '>', '>=': '≥', '<': '<', '<=': '≤', '==': '=', 'cross_above': '↗ crosses above', 'cross_below': '↘ crosses below' };
 
   return (
     <span style={{
@@ -229,7 +229,7 @@ export default function RunScreen() {
   const [capFilter, setCapFilter] = useState('all');
   const [sectorFilter, setSectorFilter] = useState(initialSector);
   const [sectors, setSectors] = useState([]);
-  const [matchedOnly, setMatchedOnly] = useState(false);
+  const [matchedOnly, setMatchedOnly] = useState(true);
   const [totalScanned, setTotalScanned] = useState(0);
   const [totalMatched, setTotalMatched] = useState(0);
 

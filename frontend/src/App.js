@@ -10,6 +10,8 @@ import RunScreen from './pages/RunScreen';
 import SectorExplorer from './pages/SectorExplorer';
 import CandlePatterns from './pages/CandlePatterns';
 import Financials from './pages/Financials';
+import Trading from './pages/Trading';
+import Admin from './pages/Admin';
 
 function NavBar() {
   const location = useLocation();
@@ -32,6 +34,8 @@ function NavBar() {
   const isSectors = path === '/sectors';
   const isPatterns = path === '/patterns';
   const isFinancials = path === '/financials';
+  const isTrading = path === '/trading';
+  const isAdmin = path === '/admin';
 
   return (
     <nav>
@@ -54,6 +58,12 @@ function NavBar() {
       </Link>
       <Link to="/financials" style={tabStyle(isFinancials)}>
         Financials
+      </Link>
+      <Link to="/trading" style={tabStyle(isTrading)}>
+        Trading
+      </Link>
+      <Link to="/admin" style={tabStyle(isAdmin)}>
+        Admin
       </Link>
       <div style={{ flex: 1 }} />
       <Link to="/strategies/new" style={{
@@ -88,6 +98,8 @@ function App() {
           <Route path="/sectors" element={<SectorExplorer />} />
           <Route path="/patterns" element={<CandlePatterns />} />
           <Route path="/financials" element={<Financials />} />
+          <Route path="/trading" element={<Trading />} />
+          <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<StrategiesList />} />
         </Routes>
       </div>
