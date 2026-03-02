@@ -1,0 +1,23 @@
+# Strategy Screener Cron Jobs
+# Installed to /etc/cron.d/screener-cron
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MAILTO=""
+
+# --- OHLCV data refresh (stocks) — every weekday at 6:30 PM IST (1:00 PM UTC) ---
+0 13 * * 1-5 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python fyers_ohlcv_1d_job.py >> /var/log/screener/ohlcv-stocks.log 2>&1
+
+# --- OHLCV data refresh (commodities) — every weekday at 7:00 PM IST (1:30 PM UTC) ---
+30 13 * * 1-5 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python commodity_ohlcv_job.py >> /var/log/screener/ohlcv-commodities.log 2>&1
+
+# --- Enrich market cap / sector data — every Sunday at 10 AM IST (4:30 AM UTC) ---
+30 4 * * 0 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python enrich_market_cap.py >> /var/log/screener/enrich.log 2>&1
+
+# --- Scrape latest result announcements from NSE — every weekday at 8 PM IST (2:30 PM UTC) ---
+30 14 * * 1-5 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python scrape_latest_results.py --days 1 --scrape-financials >> /var/log/screener/latest-results.log 2>&1
+
+# --- Full financials scrape (batch of 200) — every Saturday at 2 AM IST (8:30 PM UTC Friday) ---
+30 20 * * 5 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python scrape_financials.py --limit 200 --sleep 1.5 >> /var/log/screener/financials.log 2>&1
+
+# --- Log rotation — clean logs older than 30 days ---
+0 3 * * 0 screener find /var/log/screener -name "*.log" -mtime +30 -delete 2>/dev/null

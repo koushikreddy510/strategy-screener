@@ -1,0 +1,19 @@
+[Unit]
+Description=Strategy Screener Backend (FastAPI)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=screener
+Group=screener
+WorkingDirectory=/opt/strategy-screener
+Environment=DATABASE_URL=postgresql://market_user:market_pass@localhost:5432/market
+ExecStart=/opt/strategy-screener/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/screener/backend.log
+StandardError=append:/var/log/screener/backend-error.log
+
+[Install]
+WantedBy=multi-user.target
