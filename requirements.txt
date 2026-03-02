@@ -1,0 +1,8 @@
+pandas
+numpy
+pandas_ta
+SQLAlchemy
+psycopg2-binary
+fastapi
+uvicorn[standard]
+python-dotenv
