@@ -33,6 +33,7 @@ jobs:
             PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/ohlc.sql 2>/dev/null || true
             PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/enrich_symbols.sql 2>/dev/null || true
             PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/financials_schema.sql 2>/dev/null || true
+            PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/strategy-screener/migrations/add_financials_source.sql 2>/dev/null || true
             PGPASSWORD=market_pass psql -h localhost -U market_user -d market -f /opt/data-store/commodity_schema.sql 2>/dev/null || true
 
             echo "=== Building frontend ==="

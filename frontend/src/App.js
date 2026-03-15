@@ -9,6 +9,7 @@ import EditCondition from './pages/EditCondition';
 import RunScreen from './pages/RunScreen';
 import SectorExplorer from './pages/SectorExplorer';
 import CandlePatterns from './pages/CandlePatterns';
+import ChartPatterns from './pages/ChartPatterns';
 import Financials from './pages/Financials';
 import Trading from './pages/Trading';
 import Admin from './pages/Admin';
@@ -33,6 +34,7 @@ function NavBar() {
   const isStrategies = path === '/strategies' || path === '/';
   const isSectors = path === '/sectors';
   const isPatterns = path === '/patterns';
+  const isChartPatterns = path === '/chart-patterns';
   const isFinancials = path === '/financials';
   const isTrading = path === '/trading';
   const isAdmin = path === '/admin';
@@ -54,7 +56,10 @@ function NavBar() {
         Sectors
       </Link>
       <Link to="/patterns" style={tabStyle(isPatterns)}>
-        Patterns
+        Candles
+      </Link>
+      <Link to="/chart-patterns" style={tabStyle(isChartPatterns)}>
+        Chart
       </Link>
       <Link to="/financials" style={tabStyle(isFinancials)}>
         Financials
@@ -97,6 +102,7 @@ function App() {
           <Route path="/run/:id" element={<RunScreen />} />
           <Route path="/sectors" element={<SectorExplorer />} />
           <Route path="/patterns" element={<CandlePatterns />} />
+          <Route path="/chart-patterns" element={<ChartPatterns />} />
           <Route path="/financials" element={<Financials />} />
           <Route path="/trading" element={<Trading />} />
           <Route path="/admin" element={<Admin />} />

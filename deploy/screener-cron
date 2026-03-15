@@ -16,8 +16,16 @@ MAILTO=""
 # --- Scrape latest result announcements from NSE — every weekday at 8 PM IST (2:30 PM UTC) ---
 30 14 * * 1-5 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python scrape_latest_results.py --days 1 --scrape-financials >> /var/log/screener/latest-results.log 2>&1
 
+# --- Scrape screener.in latest results (separate from NSE/financials) — daily at 7:30 AM IST (2:00 AM UTC) ---
+0 2 * * * screener curl -s -X POST http://127.0.0.1:8000/admin/scrape-screener-latest >> /var/log/screener/screener-latest.log 2>&1
+
 # --- Full financials scrape (batch of 200) — every Saturday at 2 AM IST (8:30 PM UTC Friday) ---
 30 20 * * 5 screener cd /opt/data-store && /opt/strategy-screener/venv/bin/python scrape_financials.py --limit 200 --sleep 1.5 >> /var/log/screener/financials.log 2>&1
+
+# --- Daily AI Screener Report (all strategies → top 10/sector → AI → Slack) — 8 AM and 5 PM IST daily ---
+# 8 AM IST = 2:30 UTC | 5 PM IST = 11:30 UTC (server in UTC)
+30 2 * * * screener curl -s -X POST http://127.0.0.1:8000/admin/daily-ai-report >> /var/log/screener/daily-ai-report.log 2>&1
+30 11 * * * screener curl -s -X POST http://127.0.0.1:8000/admin/daily-ai-report >> /var/log/screener/daily-ai-report.log 2>&1
 
 # --- Log rotation — clean logs older than 30 days ---
 0 3 * * 0 screener find /var/log/screener -name "*.log" -mtime +30 -delete 2>/dev/null

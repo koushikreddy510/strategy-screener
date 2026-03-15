@@ -288,6 +288,26 @@ def _update_financials_job(mode: str = "incremental", limit: int = 0):
             "SELECT tradingsymbol, isin FROM symbols ORDER BY tradingsymbol"
         )).fetchall()]
 
+    # Prioritize symbols that have recent result announcements so Latest Results
+    # gets financial data quickly (NSE announcements have dates but no financials).
+    with engine.connect() as conn:
+        ann_syms = set(
+            r[0] for r in conn.execute(text("""
+                SELECT DISTINCT nse_symbol FROM result_announcements
+                WHERE result_date >= CURRENT_DATE - interval '45 days'
+            """)).fetchall()
+        )
+    if ann_syms:
+        def key(row):
+            ts = row[0]
+            nse = ts.split(":")[-1].replace("-EQ", "") if ":" in ts else ts.replace("-EQ", "")
+            return (0 if nse in ann_syms else 1, ts)
+        symbols = sorted(symbols, key=key)
+
+    if mode == "announcements_only":
+        symbols = [s for s in symbols if (s[0].split(":")[-1].replace("-EQ", "") if ":" in s[0] else s[0].replace("-EQ", "")) in ann_syms]
+        # Don't apply incremental filter — re-scrape these to fill Latest Results
+
     if mode == "incremental":
         with engine.connect() as conn:
             recently_scraped = set(
@@ -475,7 +495,14 @@ def start_sector_enrichment() -> dict:
 
 
 def _scrape_latest_results_job(days: int = 7):
-    """Fetch latest financial result announcements from NSE corporate announcements."""
+    """Fetch latest financial result announcements from NSE corporate announcements.
+
+    Data sources:
+    - NSE: This job fetches from NSE corporate announcements API (source='nse').
+    - Screener.in: Entries with source='screener.in' come from the Financial Results
+      scraper when it processes company pages — NOT from screener.in/results/latest/
+      which requires login and cannot be scraped without credentials.
+    """
     import requests as rq
     import re
 
@@ -596,6 +623,194 @@ def _scrape_latest_results_job(days: int = 7):
 
 def start_latest_results_scrape(days: int = 7) -> dict:
     return _run_in_thread("latest_results", _scrape_latest_results_job, days)
+
+
+def _scrape_screener_latest_job():
+    """Scrape latest result announcements from screener.in/results/latest/.
+
+    This is SEPARATE from the Financial Results scraper. It does NOT check/scrape
+    financials for our symbols — it only fetches the "latest results" list from
+    screener.in. Data goes into result_announcements with source='screener.in'.
+
+    Note: screener.in/results/latest/ requires login. Without credentials,
+    the page returns a registration wall. This job will report that if encountered.
+
+    Rate limiting: 3s delay before request, retries on 429 with backoff.
+    Optional: Set SCREENER_SESSION_COOKIE env to pass cookies from a logged-in browser.
+    """
+    import requests as rq
+    from bs4 import BeautifulSoup
+    import re
+
+    URL = "https://www.screener.in/results/latest/"
+    REQUEST_DELAY = int(os.getenv("SCREENER_REQUEST_DELAY_SEC", "3"))
+    MAX_RETRIES = 3
+    BACKOFF_SEC = 10
+
+    HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    with _job_lock:
+        if "screener_latest" in _running_jobs:
+            _running_jobs["screener_latest"]["progress"] = f"Waiting {REQUEST_DELAY}s before request (rate limit)..."
+    time.sleep(REQUEST_DELAY)
+
+    with _job_lock:
+        if "screener_latest" in _running_jobs:
+            _running_jobs["screener_latest"]["progress"] = "Fetching screener.in/results/latest/..."
+
+    session = rq.Session()
+    session.headers.update(HEADERS)
+
+    # Optional: session cookies from logged-in browser (e.g. sessionid=...; csrftoken=...)
+    cookie_str = os.getenv("SCREENER_SESSION_COOKIE", "").strip()
+    if cookie_str:
+        session.headers["Cookie"] = cookie_str
+
+    html = None
+    last_err = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = session.get(URL, timeout=30)
+            if resp.status_code == 429:
+                last_err = f"429 Too Many Requests (attempt {attempt + 1}/{MAX_RETRIES})"
+                if attempt < MAX_RETRIES - 1:
+                    with _job_lock:
+                        if "screener_latest" in _running_jobs:
+                            _running_jobs["screener_latest"]["progress"] = f"{last_err} — waiting {BACKOFF_SEC}s..."
+                    time.sleep(BACKOFF_SEC)
+                    continue
+                resp.raise_for_status()
+            resp.raise_for_status()
+            html = resp.text
+            break
+        except Exception as e:
+            last_err = str(e)
+            if attempt < MAX_RETRIES - 1 and "429" in str(e):
+                time.sleep(BACKOFF_SEC)
+                continue
+            with _job_lock:
+                if "screener_latest" in _running_jobs:
+                    _running_jobs["screener_latest"]["error"] = str(e)
+            raise
+
+    if html is None:
+        with _job_lock:
+            if "screener_latest" in _running_jobs:
+                _running_jobs["screener_latest"]["error"] = last_err or "No response"
+        raise RuntimeError(last_err or "No response from screener.in")
+
+    # Check for login/register wall
+    lower = html.lower()
+    if "create account" in lower or "register" in lower[:3000] or "login here" in lower[:5000]:
+        msg = (
+            "Screener.in /results/latest/ requires login — page returned registration wall. "
+            "Cannot scrape without credentials. Screener.in entries in Latest Results come "
+            "from the Financial Results scraper when it processes company pages."
+        )
+        with _job_lock:
+            if "screener_latest" in _running_jobs:
+                _running_jobs["screener_latest"]["progress"] = msg
+                _running_jobs["screener_latest"]["error"] = msg
+        return
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Look for company links: /company/SYMBOL/ or /company/company-name--SYMBOL/
+    # and result-related table rows
+    results = []
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        m = re.search(r"/company/([^/]+)/?", href)
+        if m:
+            slug = m.group(1)
+            # Extract symbol: "company-name--SYMBOL" -> SYMBOL, or just "SYMBOL"
+            if "--" in slug:
+                symbol = slug.split("--")[-1].upper()
+            else:
+                symbol = slug.upper().replace("-", "")
+            name = (a.get_text() or "").strip()
+            if symbol and len(symbol) <= 15:
+                results.append({"nse_symbol": symbol, "company_name": name or ""})
+
+    # Dedupe by symbol (keep first occurrence)
+    seen = set()
+    unique = []
+    for r in results:
+        if r["nse_symbol"] not in seen:
+            seen.add(r["nse_symbol"])
+            unique.append(r)
+
+    if not unique:
+        msg = "No parseable results from screener.in (page may require login or structure changed)."
+        with _job_lock:
+            if "screener_latest" in _running_jobs:
+                _running_jobs["screener_latest"]["progress"] = msg
+                _running_jobs["screener_latest"]["error"] = msg
+        return
+
+    today = date.today()
+    upsert_sql = """
+    INSERT INTO result_announcements (nse_symbol, company_name, result_date, quarter, source, scraped_at)
+    VALUES (:sym, :company, :dt, :q, 'screener.in', now())
+    ON CONFLICT (nse_symbol, result_date, quarter)
+    DO UPDATE SET company_name = EXCLUDED.company_name, scraped_at = now()
+    """
+    saved = 0
+    with engine.connect() as conn:
+        for i, r in enumerate(unique):
+            conn.execute(text(upsert_sql), {
+                "sym": r["nse_symbol"], "company": r["company_name"],
+                "dt": today, "q": "screener_latest",
+            })
+            conn.commit()
+            saved += 1
+            with _job_lock:
+                if "screener_latest" in _running_jobs:
+                    _running_jobs["screener_latest"]["progress"] = f"[{i+1}/{len(unique)}] {r['nse_symbol']}"
+
+    with _job_lock:
+        if "screener_latest" in _running_jobs:
+            _running_jobs["screener_latest"]["progress"] = f"Done: {saved} announcements from screener.in"
+
+
+def start_screener_latest_scrape() -> dict:
+    return _run_in_thread("screener_latest", _scrape_screener_latest_job)
+
+
+def _daily_ai_report_job():
+    """Run all strategies, collect passed stocks, top 10 per sector, AI analysis, post to Slack."""
+    from backend.database import SessionLocal
+    from ai_screener_report import run_daily_report
+
+    db = SessionLocal()
+    try:
+        with _job_lock:
+            if "daily_ai_report" in _running_jobs:
+                _running_jobs["daily_ai_report"]["progress"] = "Collecting matches from all strategies..."
+
+        result = run_daily_report(db)
+        with _job_lock:
+            if "daily_ai_report" in _running_jobs:
+                msg = f"Done: {result.get('total_matches', 0)} stocks, Slack={'OK' if result.get('slack_posted') else 'Fail'}"
+                if result.get("error"):
+                    msg = result["error"]
+                _running_jobs["daily_ai_report"]["progress"] = msg
+    except Exception as e:
+        with _job_lock:
+            if "daily_ai_report" in _running_jobs:
+                _running_jobs["daily_ai_report"]["progress"] = f"Error: {str(e)[:200]}"
+                _running_jobs["daily_ai_report"]["error"] = str(e)
+        raise
+    finally:
+        db.close()
+
+
+def start_daily_ai_report() -> dict:
+    return _run_in_thread("daily_ai_report", _daily_ai_report_job)
 
 
 def get_job_status(job_id: str) -> dict:

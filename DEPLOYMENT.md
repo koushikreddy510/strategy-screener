@@ -53,3 +53,11 @@ DATABASE_URL="postgresql://market_user:YOUR_PASSWORD@210.79.129.135:5432/market"
 ```
 
 That script uses the NSE API and is rate-limited.
+
+## Mobile / HTTPS
+
+**Site not visible on mobile Chrome?** Mobile browsers often try HTTPS first. If the server only has HTTP (port 80), requests to `https://koushik510.store` will fail. Set up SSL:
+
+1. On the server: `sudo apt install certbot python3-certbot-nginx`
+2. Run: `sudo certbot --nginx -d koushik510.store -d www.koushik510.store`
+3. Certbot configures SSL and auto-renewal. Until SSL works, use `http://koushik510.store` explicitly.

@@ -99,9 +99,70 @@ def vwap_indicator(df: pd.DataFrame) -> pd.Series:
         return cum_tp_vol / cum_vol
     return result
 
+
+def macd_indicator(df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    """MACD: returns DataFrame with macd_line, macd_signal, macd_hist."""
+    res = ta.macd(df["close"], fast=fast, slow=slow, signal=signal)
+    if res is None or res.empty:
+        out = df[["close"]].copy()
+        out["macd_line"] = np.nan
+        out["macd_signal"] = np.nan
+        out["macd_hist"] = np.nan
+        return out[["macd_line", "macd_signal", "macd_hist"]]
+    cols = list(res.columns)
+    out = df[["close"]].copy()
+    out["macd_line"] = res[cols[0]].values if len(cols) > 0 else np.nan
+    out["macd_signal"] = res[cols[2]].values if len(cols) > 2 else np.nan
+    out["macd_hist"] = res[cols[1]].values if len(cols) > 1 else np.nan
+    return out[["macd_line", "macd_signal", "macd_hist"]]
+
+
+def bollinger_indicator(df: pd.DataFrame, length: int = 20, std: float = 2.0) -> pd.DataFrame:
+    """Bollinger Bands: returns lower, middle, upper, pct_b."""
+    res = ta.bbands(df["close"], length=length, std=std)
+    if res is None or res.empty:
+        out = df[["close"]].copy()
+        out["bb_lower"] = out["bb_middle"] = out["bb_upper"] = out["bb_pct"] = np.nan
+        return out[["bb_lower", "bb_middle", "bb_upper", "bb_pct"]]
+    cols = list(res.columns)
+    out = df[["close"]].copy()
+    out["bb_lower"] = res[cols[0]].values if len(cols) > 0 else np.nan
+    out["bb_middle"] = res[cols[1]].values if len(cols) > 1 else np.nan
+    out["bb_upper"] = res[cols[2]].values if len(cols) > 2 else np.nan
+    out["bb_pct"] = res[cols[4]].values if len(cols) > 4 else np.nan  # BBP
+    return out[["bb_lower", "bb_middle", "bb_upper", "bb_pct"]]
+
+
+def atr_indicator(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    return ta.atr(df["high"], df["low"], df["close"], length=length)
+
+
+def sma_indicator(df: pd.DataFrame, length: int) -> pd.Series:
+    return ta.sma(df["close"], length=length)
+
+
+def stochastic_indicator(df: pd.DataFrame, k: int = 14, d: int = 3) -> pd.DataFrame:
+    """Stochastic %K and %D."""
+    res = ta.stoch(df["high"], df["low"], df["close"], k=k, d=d)
+    if res is None or res.empty:
+        out = df[["close"]].copy()
+        out["stoch_k"] = out["stoch_d"] = np.nan
+        return out[["stoch_k", "stoch_d"]]
+    cols = list(res.columns)
+    out = df[["close"]].copy()
+    out["stoch_k"] = res[cols[0]].values if len(cols) > 0 else np.nan
+    out["stoch_d"] = res[cols[1]].values if len(cols) > 1 else np.nan
+    return out[["stoch_k", "stoch_d"]]
+
+
 INDICATORS = {
     "ema": ema_indicator,
+    "sma": sma_indicator,
     "rsi": rsi_indicator,
+    "macd": macd_indicator,
+    "bollinger": bollinger_indicator,
+    "atr": atr_indicator,
+    "stochastic": stochastic_indicator,
     "supertrend": supertrend_indicator,
     "parabolic_sar": parabolic_sar_indicator,
     "vwap": vwap_indicator,
@@ -112,9 +173,39 @@ INDICATOR_METADATA = {
         "params": {"length": {"type": "int", "default": 14, "min": 1}},
         "description": "Exponential Moving Average",
     },
+    "sma": {
+        "params": {"length": {"type": "int", "default": 20, "min": 1}},
+        "description": "Simple Moving Average",
+    },
     "rsi": {
         "params": {"length": {"type": "int", "default": 14, "min": 1}},
         "description": "Relative Strength Index",
+    },
+    "macd": {
+        "params": {
+            "fast": {"type": "int", "default": 12, "min": 1},
+            "slow": {"type": "int", "default": 26, "min": 1},
+            "signal": {"type": "int", "default": 9, "min": 1},
+        },
+        "description": "MACD (Moving Average Convergence Divergence). Uses macd_line by default.",
+    },
+    "bollinger": {
+        "params": {
+            "length": {"type": "int", "default": 20, "min": 1},
+            "std": {"type": "float", "default": 2.0, "min": 0.1},
+        },
+        "description": "Bollinger Bands. Uses bb_pct (%B) by default. Or compare close to bb_lower/bb_upper.",
+    },
+    "atr": {
+        "params": {"length": {"type": "int", "default": 14, "min": 1}},
+        "description": "Average True Range (volatility)",
+    },
+    "stochastic": {
+        "params": {
+            "k": {"type": "int", "default": 14, "min": 1},
+            "d": {"type": "int", "default": 3, "min": 1},
+        },
+        "description": "Stochastic Oscillator. Uses %K by default.",
     },
     "supertrend": {
         "params": {
@@ -171,6 +262,18 @@ def load_conditions(strategy_id: int):
     return conditions
 
 def load_ohlc(symbol: str, market_type: str = "stocks", timeframe: str = "1D") -> pd.DataFrame:
+    """Load OHLC. For stocks+1W, resamples from 1D (broker provides 1D only; 1W = aggregated)."""
+    if market_type == "stocks" and timeframe == "1W":
+        df = load_ohlc(symbol, market_type, "1D")
+        if df.empty or len(df) < 5:
+            return df
+        df = df.sort_index()
+        df.index.name = "date"
+        # Resample to weekly: week ending Friday (India market convention)
+        weekly = df.resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+        weekly = weekly.dropna(subset=["close"], how="all")
+        weekly.index.name = "date"
+        return weekly
     info = _get_table_info(market_type, timeframe)
     table = info["table"]
     dt_col = info["dt_col"]
@@ -246,6 +349,18 @@ def evaluate_condition(cond: dict, df: pd.DataFrame) -> bool:
             series = result["psar_dir"] if operator == "==" else result["psar"]
         elif indicator_type == "vwap":
             series = INDICATORS[indicator_type](df)
+        elif indicator_type == "macd":
+            result = INDICATORS[indicator_type](df, **params)
+            out_key = params.get("output", "macd_line")
+            series = result[out_key] if out_key in result.columns else result["macd_line"]
+        elif indicator_type == "bollinger":
+            result = INDICATORS[indicator_type](df, **params)
+            out_key = params.get("output", "bb_pct")
+            series = result[out_key] if out_key in result.columns else result["bb_pct"]
+        elif indicator_type == "stochastic":
+            result = INDICATORS[indicator_type](df, **params)
+            out_key = params.get("output", "stoch_k")
+            series = result[out_key] if out_key in result.columns else result["stoch_k"]
         else:
             series = INDICATORS[indicator_type](df, **params)
 
@@ -315,6 +430,21 @@ def compute_indicator_values(df: pd.DataFrame, conditions: list) -> Dict[str, An
                 val = INDICATORS[indicator_type](df)
                 v = val.iloc[-1] if val is not None else None
                 values[label] = round(float(v), 2) if v is not None and not pd.isna(v) else None
+            elif indicator_type == "macd":
+                result = INDICATORS[indicator_type](df, **params)
+                out_key = params.get("output", "macd_line")
+                v = result[out_key].iloc[-1] if out_key in result.columns else result["macd_line"].iloc[-1]
+                values[label] = round(float(v), 4) if v is not None and not pd.isna(v) else None
+            elif indicator_type == "bollinger":
+                result = INDICATORS[indicator_type](df, **params)
+                out_key = params.get("output", "bb_pct")
+                v = result[out_key].iloc[-1] if out_key in result.columns else result["bb_pct"].iloc[-1]
+                values[label] = round(float(v), 4) if v is not None and not pd.isna(v) else None
+            elif indicator_type == "stochastic":
+                result = INDICATORS[indicator_type](df, **params)
+                out_key = params.get("output", "stoch_k")
+                v = result[out_key].iloc[-1] if out_key in result.columns else result["stoch_k"].iloc[-1]
+                values[label] = round(float(v), 2) if v is not None and not pd.isna(v) else None
             else:
                 series = INDICATORS[indicator_type](df, **params)
                 v = series.iloc[-1] if series is not None else None
@@ -367,9 +497,22 @@ def get_chart_data_with_indicators(
                 elif ind_type == "vwap":
                     val = INDICATORS[ind_type](idx_df)
                     df[label] = val.values if val is not None else np.nan
+                elif ind_type == "macd":
+                    result = INDICATORS[ind_type](idx_df, **params)
+                    out_key = params.get("output", "macd_line")
+                    df[label] = result[out_key].values if out_key in result.columns else result["macd_line"].values
+                elif ind_type == "bollinger":
+                    result = INDICATORS[ind_type](idx_df, **params)
+                    df[f"{label}_lower"] = result["bb_lower"].values
+                    df[f"{label}_mid"] = result["bb_middle"].values
+                    df[f"{label}_upper"] = result["bb_upper"].values
+                elif ind_type == "stochastic":
+                    result = INDICATORS[ind_type](idx_df, **params)
+                    df[f"{label}_k"] = result["stoch_k"].values
+                    df[f"{label}_d"] = result["stoch_d"].values
                 else:
                     series = INDICATORS[ind_type](idx_df, **params)
-                    df[label] = series.values if series is not None else np.nan
+                    df[label] = series.values if hasattr(series, 'values') else np.nan
             except Exception:
                 df[label] = np.nan
 
@@ -538,7 +681,7 @@ def get_sector_overview(
     parent_sector: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Browse all stocks grouped by sector with market cap and latest price."""
-    from sector_groups import get_parent_sector, PARENT_SECTORS
+    from sector_groups import get_parent_sector, PARENT_SECTORS, SECTOR_INDICES
 
     with engine.connect() as conn:
         rows = conn.execute(text("""
@@ -623,6 +766,7 @@ def get_sector_overview(
         "page_size": page_size,
         "sectors": sector_list,
         "sector_counts": sector_counts,
+        "sector_indices": SECTOR_INDICES,
         "group_sectors": group_sectors,
     }
 
@@ -637,8 +781,9 @@ def scan_all_patterns(
     sort_dir: str = "desc",
     lookback: int = 3,
 ) -> Dict[str, Any]:
-    """Scan all stocks for candlestick patterns on 1D timeframe."""
+    """Scan all stocks for candlestick and structural patterns on 1D timeframe."""
     from candle_patterns import scan_patterns_for_symbol, PATTERN_REGISTRY
+    from chart_patterns_structural import scan_structural_patterns_for_symbol
 
     cache_key = f"patterns:{signal_filter}:{pattern_filter}:{lookback}"
     cached = _get_cached(cache_key)
@@ -659,12 +804,17 @@ def scan_all_patterns(
                 continue
 
             patterns = scan_patterns_for_symbol(df, lookback=lookback)
+            structural = scan_structural_patterns_for_symbol(df, lookback=max(lookback * 5, 20))
+            patterns = patterns + structural
             if not patterns:
                 continue
 
             last = df.iloc[-1]
             info = sym_info_map.get(sym, {})
             mcap = info.get("market_cap", 0)
+
+            closes = df["close"].tail(60)
+            sparkline_data = [{"i": i, "close": round(float(v), 2)} for i, v in enumerate(closes.tolist())]
 
             for p in patterns:
                 all_results.append({
@@ -685,6 +835,7 @@ def scan_all_patterns(
                     "candles": p["candles"],
                     "group": p["group"],
                     "bar_date": p["bar_date"],
+                    "sparkline": sparkline_data,
                 })
 
         _set_cache(cache_key, all_results)
@@ -702,7 +853,11 @@ def scan_all_patterns(
         filtered = [r for r in filtered if r["market_cap_category"].lower().replace(" ", "_") == cap_filter]
 
     if sector_filter and sector_filter != "all":
-        filtered = [r for r in filtered if r.get("sector", "") == sector_filter]
+        from sector_groups import get_parent_sector, PARENT_SECTORS
+        if sector_filter in PARENT_SECTORS:
+            filtered = [r for r in filtered if get_parent_sector(r.get("sector", "")) == sector_filter]
+        else:
+            filtered = [r for r in filtered if r.get("sector", "") == sector_filter]
 
     reverse = sort_dir == "desc"
     if sort_by == "strength":
@@ -727,6 +882,260 @@ def scan_all_patterns(
     start = (page - 1) * page_size
     end = start + page_size
 
+    return {
+        "results": filtered[start:end],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "patterns": all_patterns,
+        "pattern_counts": pattern_counts,
+        "signal_counts": signal_counts,
+        "sectors": all_sectors,
+    }
+
+
+# 52-week bars (~252 trading days)
+WEEK_52_BARS = 252
+
+
+def scan_52w_high_low(
+    page: int = 1,
+    page_size: int = 20,
+    near_pct: Optional[float] = None,
+    cap_filter: Optional[str] = None,
+    sector_filter: Optional[str] = None,
+    sort_by: str = "pct_from_high",
+    sort_dir: str = "asc",
+    chart_bars: int = 120,
+    chart_timeframe: str = "1D",
+) -> Dict[str, Any]:
+    """Scan all stocks for 52-week high/low. near_pct: filter to within X% of 52w high (e.g. 5 = within 5%)."""
+    cache_key = f"52w:{near_pct}:{chart_bars}:{chart_timeframe}"
+    cached = _get_cached(cache_key)
+
+    if cached is None:
+        all_symbols = list_symbols("stocks")
+        sym_info_map = {}
+        try:
+            sym_info_map = load_symbol_info(all_symbols)
+        except Exception:
+            pass
+
+        results = []
+        for sym in all_symbols:
+            df = load_ohlc(sym, "stocks", "1D")
+            if df.empty or len(df) < 52:
+                continue
+            win = df.tail(WEEK_52_BARS)
+            high_52w = float(win["high"].max())
+            low_52w = float(win["low"].min())
+            close = float(df["close"].iloc[-1])
+            if high_52w <= 0:
+                continue
+            pct_from_high = (high_52w - close) / high_52w * 100
+            pct_from_low = (close - low_52w) / (low_52w or 1) * 100
+
+            chart_df = load_ohlc(sym, "stocks", chart_timeframe).tail(chart_bars)
+            if chart_df.empty or len(chart_df) < 5:
+                chart_data = []
+            else:
+                chart_df = chart_df.reset_index()
+                dt_col = "date" if "date" in chart_df.columns else chart_df.columns[0]
+                chart_data = [{"date": str(row.get(dt_col, "")), "open": round(float(row["open"]), 2),
+                    "high": round(float(row["high"]), 2), "low": round(float(row["low"]), 2),
+                    "close": round(float(row["close"]), 2), "volume": int(row.get("volume", 0))}
+                    for _, row in chart_df.iterrows()]
+
+            info = sym_info_map.get(sym, {})
+            mcap = info.get("market_cap", 0)
+            results.append({
+                "symbol": sym,
+                "company_name": info.get("name", ""),
+                "close": round(close, 2),
+                "high_52w": round(high_52w, 2),
+                "low_52w": round(low_52w, 2),
+                "pct_from_high": round(pct_from_high, 2),
+                "pct_from_low": round(pct_from_low, 2),
+                "market_cap": mcap,
+                "market_cap_category": categorize_market_cap(mcap),
+                "sector": info.get("sector", ""),
+                "chart_data": chart_data,
+            })
+
+        if near_pct is not None:
+            results = [r for r in results if r["pct_from_high"] <= near_pct]
+        _set_cache(cache_key, results)
+        cached = results
+
+    filtered = list(cached)
+    if cap_filter and cap_filter != "all":
+        filtered = [r for r in filtered if r["market_cap_category"].lower().replace(" ", "_") == cap_filter]
+    if sector_filter and sector_filter != "all":
+        from sector_groups import get_parent_sector, PARENT_SECTORS
+        if sector_filter in PARENT_SECTORS:
+            filtered = [r for r in filtered if get_parent_sector(r.get("sector", "")) == sector_filter]
+        else:
+            filtered = [r for r in filtered if r.get("sector", "") == sector_filter]
+
+    reverse = sort_dir == "desc"
+    if sort_by == "pct_from_high":
+        filtered.sort(key=lambda r: r["pct_from_high"], reverse=reverse)
+    elif sort_by == "pct_from_low":
+        filtered.sort(key=lambda r: r["pct_from_low"], reverse=reverse)
+    elif sort_by == "close":
+        filtered.sort(key=lambda r: r["close"], reverse=reverse)
+    elif sort_by == "market_cap":
+        filtered.sort(key=lambda r: r["market_cap"], reverse=reverse)
+
+    all_sectors = sorted(set(r.get("sector", "") for r in cached if r.get("sector")))
+    total = len(filtered)
+    start = (page - 1) * page_size
+    end = start + page_size
+    return {
+        "results": filtered[start:end],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "sectors": all_sectors,
+        "screen": "near_52w_high" if near_pct else "52w_high_low",
+    }
+
+
+def scan_structural_patterns(
+    page: int = 1,
+    page_size: int = 20,
+    signal_filter: Optional[str] = None,
+    pattern_filter: Optional[str] = None,
+    cap_filter: Optional[str] = None,
+    sector_filter: Optional[str] = None,
+    sort_by: str = "strength",
+    sort_dir: str = "desc",
+    lookback: int = 25,
+    timeframe: str = "1D",
+    chart_bars: int = 120,
+) -> Dict[str, Any]:
+    """Scan all stocks for structural patterns (triangles, wedges, cup & handle).
+    Returns chart_data + pattern_lines for each detection so the pattern can be drawn on the chart.
+    timeframe: 1D or 1W (1W = resampled from 1D). chart_bars: bars to include in chart."""
+    from chart_patterns_structural import scan_structural_patterns_for_symbol
+
+    cache_key = f"structural:{signal_filter}:{pattern_filter}:{lookback}:{timeframe}:{chart_bars}"
+    cached = _get_cached(cache_key)
+
+    if cached is None:
+        all_symbols = list_symbols("stocks")
+        all_results = []
+        sym_info_map = {}
+        try:
+            sym_info_map = load_symbol_info(all_symbols)
+        except Exception:
+            pass
+
+        lb = max(lookback, 20)
+        min_bars = chart_bars
+        # For 1W: ~52 weeks from 1 year of daily data; require only ~30 bars for pattern detection
+        if timeframe == "1W":
+            min_bars = 30
+
+        for sym in all_symbols:
+            df = load_ohlc(sym, "stocks", timeframe)
+            if df.empty or len(df) < min_bars:
+                continue
+
+            pattern_lb = max(lb, 20) if timeframe == "1W" else max(lb * 2, 40)
+            patterns = scan_structural_patterns_for_symbol(df, lookback=pattern_lb)
+            patterns = [p for p in patterns if p.get("group") == "structural"]
+            if not patterns:
+                continue
+
+            last = df.iloc[-1]
+            info = sym_info_map.get(sym, {})
+            mcap = info.get("market_cap", 0)
+            n_chart = min(chart_bars, len(df))
+            chart_df = df.tail(n_chart).reset_index()
+            dt_col = "date" if "date" in chart_df.columns else "datetime"
+            chart_df[dt_col] = chart_df[dt_col].astype(str)
+            chart_data = []
+            for _, row in chart_df.iterrows():
+                chart_data.append({
+                    "date": str(row.get(dt_col, row.get("datetime", ""))),
+                    "open": round(float(row["open"]), 2),
+                    "high": round(float(row["high"]), 2),
+                    "low": round(float(row["low"]), 2),
+                    "close": round(float(row["close"]), 2),
+                    "volume": int(row.get("volume", 0)),
+                })
+
+            for p in patterns:
+                lines = p.get("lines") or []
+                # Convert line indices to chart-relative: pattern uses last candles bars
+                candles = p.get("candles", lb)
+                offset = n_chart - candles
+                adjusted_lines = []
+                for line in lines:
+                    adjusted_points = [{"i": pt["i"] + offset, "value": pt["value"]} for pt in line.get("points", [])]
+                    adjusted_lines.append({"type": line.get("type", ""), "points": adjusted_points})
+
+                all_results.append({
+                    "symbol": sym,
+                    "company_name": info.get("name", ""),
+                    "close": round(float(last["close"]), 2),
+                    "open": round(float(last["open"]), 2),
+                    "high": round(float(last["high"]), 2),
+                    "low": round(float(last["low"]), 2),
+                    "volume": int(last["volume"]),
+                    "date": str(df.index[-1]),
+                    "market_cap": mcap,
+                    "market_cap_category": categorize_market_cap(mcap),
+                    "sector": info.get("sector", ""),
+                    "pattern": p["pattern"],
+                    "signal": p["signal"],
+                    "strength": p["strength"],
+                    "candles": candles,
+                    "group": p["group"],
+                    "bar_date": p["bar_date"],
+                    "chart_data": chart_data,
+                    "pattern_lines": adjusted_lines,
+                })
+
+        _set_cache(cache_key, all_results)
+        cached = all_results
+
+    filtered = list(cached)
+    if signal_filter and signal_filter != "all":
+        filtered = [r for r in filtered if r["signal"] == signal_filter]
+    if pattern_filter and pattern_filter != "all":
+        filtered = [r for r in filtered if r["pattern"] == pattern_filter]
+    if cap_filter and cap_filter != "all":
+        filtered = [r for r in filtered if r["market_cap_category"].lower().replace(" ", "_") == cap_filter]
+    if sector_filter and sector_filter != "all":
+        from sector_groups import get_parent_sector, PARENT_SECTORS
+        if sector_filter in PARENT_SECTORS:
+            filtered = [r for r in filtered if get_parent_sector(r.get("sector", "")) == sector_filter]
+        else:
+            filtered = [r for r in filtered if r.get("sector", "") == sector_filter]
+
+    reverse = sort_dir == "desc"
+    if sort_by == "strength":
+        filtered.sort(key=lambda r: r["strength"], reverse=reverse)
+    elif sort_by == "market_cap":
+        filtered.sort(key=lambda r: r["market_cap"], reverse=reverse)
+    elif sort_by == "close":
+        filtered.sort(key=lambda r: r["close"], reverse=reverse)
+    elif sort_by == "volume":
+        filtered.sort(key=lambda r: r["volume"], reverse=reverse)
+
+    all_patterns = sorted(set(r["pattern"] for r in cached))
+    all_sectors = sorted(set(r["sector"] for r in cached if r.get("sector")))
+    pattern_counts = {}
+    signal_counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+    for r in cached:
+        pattern_counts[r["pattern"]] = pattern_counts.get(r["pattern"], 0) + 1
+        signal_counts[r["signal"]] = signal_counts.get(r["signal"], 0) + 1
+
+    total = len(filtered)
+    start = (page - 1) * page_size
+    end = start + page_size
     return {
         "results": filtered[start:end],
         "total": total,

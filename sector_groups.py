@@ -246,6 +246,22 @@ def get_parent_sector(sector: str) -> str:
     return SECTOR_GROUP_MAP.get(sector, "Others")
 
 
+# NSE sector indices: parent sector -> index symbol (for display/reference)
+# Note: Fyers NSE_CM is equity-only; these indices are for context. Add to symbols when index master is available.
+SECTOR_INDICES = {
+    "Automobiles": "NIFTY AUTO",
+    "Banking & Finance": "NIFTY BANK",
+    "IT & Technology": "NIFTY IT",
+    "Pharma & Healthcare": "NIFTY PHARMA",
+    "FMCG & Consumer": "NIFTY FMCG",
+    "Metals & Mining": "NIFTY METAL",
+    "Oil & Gas": "NIFTY ENERGY",
+    "Power & Energy": "NIFTY ENERGY",
+    "Realty": "NIFTY REALTY",
+}
+# Alias for Metals & Mining (NSE uses "NIFTY METAL")
+SECTOR_INDICES["Metals & Mining"] = "NIFTY METAL"
+
 # Ordered list of parent sectors for consistent UI display
 PARENT_SECTORS = [
     "Automobiles",

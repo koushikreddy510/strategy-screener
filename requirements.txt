@@ -11,3 +11,4 @@ beautifulsoup4
 psycopg[binary]
 fyers-apiv3
 certifi
+openai>=1.0.0

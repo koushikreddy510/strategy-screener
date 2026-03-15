@@ -34,6 +34,17 @@ function formatVol(v) {
   return v;
 }
 
+function formatFinCr(v) {
+  if (v == null || v === '') return '-';
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}K`;
+  if (v >= 1) return v.toFixed(0);
+  return v?.toFixed(1) ?? '-';
+}
+function formatPct(v) {
+  if (v == null || v === '') return '-';
+  return `${Number(v).toFixed(1)}%`;
+}
+
 function ChangeBadge({ pct }) {
   if (pct == null) return <span style={{ color: '#64748b' }}>-</span>;
   const pos = pct >= 0;
@@ -232,6 +243,12 @@ export default function RunScreen() {
   const [matchedOnly, setMatchedOnly] = useState(true);
   const [totalScanned, setTotalScanned] = useState(0);
   const [totalMatched, setTotalMatched] = useState(0);
+  const [includeFinancials, setIncludeFinancials] = useState(false);
+  const [aiRecommendation, setAiRecommendation] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+  const [slackSent, setSlackSent] = useState(false);
+  const [slackError, setSlackError] = useState(null);
 
   useEffect(() => {
     api.get(`/strategies/${id}`).then(r => setStrategy(r.data)).catch(() => {});
@@ -253,6 +270,7 @@ export default function RunScreen() {
         if (r.data.sectors) setSectors(r.data.sectors);
         setTotalScanned(r.data.total_scanned || r.data.total);
         setTotalMatched(r.data.total_matched || r.data.total);
+        setIncludeFinancials(r.data.include_financials || false);
         setLoading(false);
       })
       .catch(e => { setError(e.response?.data?.detail || e.toString()); setLoading(false); });
@@ -268,6 +286,35 @@ export default function RunScreen() {
 
   const handleCapFilter = (v) => { setCapFilter(v); fetchResults(1, sortBy, sortDir, v, sectorFilter, matchedOnly); };
   const handleSectorFilter = (v) => { setSectorFilter(v); fetchResults(1, sortBy, sortDir, capFilter, v, matchedOnly); };
+  const handleAiRecommend = () => {
+    if (!isStocks || totalMatched === 0) return;
+    setAiLoading(true); setAiError(null); setAiRecommendation(null);
+    api.post(`/run/${id}/ai-recommend`, {
+      sector_filter: sectorFilter || null,
+      cap_filter: capFilter !== 'all' ? capFilter : null,
+      matched_only: matchedOnly,
+      max_stocks: 50,
+    })
+      .then(r => {
+        setAiRecommendation(r.data.recommendation);
+        setAiError(r.data.error);
+        setAiLoading(false);
+      })
+      .catch(e => {
+        setAiError(e.response?.data?.detail || e.message);
+        setAiLoading(false);
+      });
+  };
+  const handleSendToSlack = () => {
+    if (!isStocks) return;
+    setSlackError(null);
+    const params = new URLSearchParams({ matched_only: matchedOnly, max_lines: 15 });
+    if (sectorFilter && sectorFilter !== 'all') params.set('sector_filter', sectorFilter);
+    if (capFilter && capFilter !== 'all') params.set('cap_filter', capFilter);
+    api.post(`/run/${id}/slack?${params}`)
+      .then(() => { setSlackSent(true); setTimeout(() => setSlackSent(false), 3000); })
+      .catch(e => setSlackError(e.response?.data?.detail || e.message));
+  };
   const handleMatchedToggle = () => {
     const next = !matchedOnly;
     setMatchedOnly(next);
@@ -375,6 +422,16 @@ export default function RunScreen() {
         <StatCard label="Showing" value={total} color="#818cf8" subtitle={matchedOnly ? 'matched only' : 'all stocks'} />
       </div>
 
+      {includeFinancials && (
+        <div style={{
+          marginBottom: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '8px', fontSize: '0.75rem',
+          background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#94a3b8',
+        }}>
+          <span style={{ color: '#4ade80', fontWeight: 600 }}>Financials enabled</span>
+          {' '}— Compare revenue, margins, P/E, P/B, PEG, ROCE, ROE, growth & 3Y CAGR. Sort by any column to rank.
+        </div>
+      )}
+
       {/* Filter bar */}
       <div style={{
         display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap',
@@ -418,7 +475,53 @@ export default function RunScreen() {
         <span style={{ color: '#475569', fontSize: '0.75rem' }}>
           {scanDays === 0 ? 'Latest data' : `Last ${scanDays} days`}
         </span>
+
+        {isStocks && totalMatched > 0 && (
+          <>
+            <button onClick={handleSendToSlack} style={{
+              marginLeft: 'auto', padding: '0.35rem 0.7rem', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600,
+              background: slackSent ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)',
+              border: `1px solid ${slackSent ? '#4ade80' : '#3b82f6'}`,
+              color: slackSent ? '#4ade80' : '#60a5fa', cursor: 'pointer',
+            }}>
+              {slackSent ? '✓ Sent' : '📤 Slack'}
+            </button>
+            <button onClick={handleAiRecommend} disabled={aiLoading} style={{
+              padding: '0.35rem 0.7rem', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600,
+              background: 'rgba(139,92,246,0.15)', border: '1px solid #8b5cf6',
+              color: '#a78bfa', cursor: aiLoading ? 'default' : 'pointer', opacity: aiLoading ? 0.7 : 1,
+            }}>
+              {aiLoading ? 'Analyzing...' : '✨ AI Picks'}
+            </button>
+          </>
+        )}
+        {slackError && <span style={{ color: '#f87171', fontSize: '0.7rem' }}>{slackError}</span>}
       </div>
+
+      {/* AI Recommendation modal */}
+      {(aiRecommendation || aiError) && (
+        <div style={{
+          marginBottom: '1rem', padding: '1rem', borderRadius: '10px',
+          background: aiError ? 'rgba(239,68,68,0.08)' : 'rgba(139,92,246,0.08)',
+          border: `1px solid ${aiError ? 'rgba(239,68,68,0.3)' : 'rgba(139,92,246,0.3)'}`,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <span style={{ fontWeight: 600, color: aiError ? '#f87171' : '#a78bfa', fontSize: '0.85rem' }}>
+              {aiError ? 'AI Error' : 'AI Top Picks'}
+            </span>
+            <button onClick={() => { setAiRecommendation(null); setAiError(null); }} style={{
+              background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.1rem',
+            }}>×</button>
+          </div>
+          {aiError ? (
+            <p style={{ margin: 0, color: '#f87171', fontSize: '0.8rem' }}>{aiError}</p>
+          ) : (
+            <div style={{ color: '#e2e8f0', fontSize: '0.82rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+              {aiRecommendation}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Results table */}
       {total === 0 && !loading ? (
@@ -458,6 +561,22 @@ export default function RunScreen() {
                     {isStocks && <Th clickable onClick={() => handleSort('market_cap')}>MCap{sortIcon('market_cap')}</Th>}
                     {isStocks && <Th>Cap</Th>}
                     {isStocks && <Th>Sector</Th>}
+                    {includeFinancials && (
+                      <>
+                        <Th clickable onClick={() => handleSort('revenue')} title="Revenue (Cr)">Rev{sortIcon('revenue')}</Th>
+                        <Th clickable onClick={() => handleSort('opm_pct')} title="Operating margin">OPM%{sortIcon('opm_pct')}</Th>
+                        <Th clickable onClick={() => handleSort('net_profit')} title="Net profit (Cr)">NP{sortIcon('net_profit')}</Th>
+                        <Th clickable onClick={() => handleSort('pe_ratio')}>P/E{sortIcon('pe_ratio')}</Th>
+                        <Th clickable onClick={() => handleSort('pb_ratio')}>P/B{sortIcon('pb_ratio')}</Th>
+                        <Th clickable onClick={() => handleSort('peg')} title="PEG ratio">PEG{sortIcon('peg')}</Th>
+                        <Th clickable onClick={() => handleSort('roce_pct')}>ROCE%{sortIcon('roce_pct')}</Th>
+                        <Th clickable onClick={() => handleSort('roe_pct')}>ROE%{sortIcon('roe_pct')}</Th>
+                        <Th clickable onClick={() => handleSort('revenue_growth_pct')} title="YoY revenue growth">RevGr%{sortIcon('revenue_growth_pct')}</Th>
+                        <Th clickable onClick={() => handleSort('profit_growth_pct')} title="YoY profit growth">PrGr%{sortIcon('profit_growth_pct')}</Th>
+                        <Th clickable onClick={() => handleSort('revenue_cagr_pct')} title="3Y revenue CAGR">RevCAGR{sortIcon('revenue_cagr_pct')}</Th>
+                        <Th clickable onClick={() => handleSort('profit_cagr_pct')} title="3Y profit CAGR">PrCAGR{sortIcon('profit_cagr_pct')}</Th>
+                      </>
+                    )}
                     {indKeys.map(k => <Th key={k}>{k}</Th>)}
                     <Th>Date</Th>
                     <Th w={50}>Chart</Th>
@@ -498,6 +617,26 @@ export default function RunScreen() {
                         {isStocks && <Td small>{formatMCap(m.market_cap)}</Td>}
                         {isStocks && <Td><MarketCapBadge category={m.market_cap_category} /></Td>}
                         {isStocks && <Td small muted title={m.sector}>{m.sector ? (m.sector.length > 16 ? m.sector.slice(0, 16) + '...' : m.sector) : '-'}</Td>}
+                        {includeFinancials && (() => {
+                          const f = m.financials || {};
+                          const c = m.cagr || {};
+                          return (
+                            <>
+                              <Td small title={`Revenue: ${f.revenue ?? '-'} Cr`}>{formatFinCr(f.revenue)}</Td>
+                              <Td small>{formatPct(f.opm_pct)}</Td>
+                              <Td small title={`Net profit: ${f.net_profit ?? '-'} Cr`}>{formatFinCr(f.net_profit)}</Td>
+                              <Td small>{f.pe_ratio != null ? f.pe_ratio.toFixed(1) : '-'}</Td>
+                              <Td small>{f.pb_ratio != null ? f.pb_ratio.toFixed(1) : '-'}</Td>
+                              <Td small>{f.peg != null ? f.peg.toFixed(2) : '-'}</Td>
+                              <Td small>{formatPct(f.roce_pct)}</Td>
+                              <Td small>{formatPct(f.roe_pct)}</Td>
+                              <Td small><ChangeBadge pct={f.revenue_growth_pct} /></Td>
+                              <Td small><ChangeBadge pct={f.profit_growth_pct} /></Td>
+                              <Td small>{c.revenue_cagr_pct != null ? `${c.revenue_cagr_pct}%` : '-'}</Td>
+                              <Td small>{c.profit_cagr_pct != null ? `${c.profit_cagr_pct}%` : '-'}</Td>
+                            </>
+                          );
+                        })()}
                         {indKeys.map(k => {
                           const dir = m.indicators?.[k + '_dir'];
                           return (

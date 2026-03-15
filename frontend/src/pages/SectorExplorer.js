@@ -103,6 +103,7 @@ export default function SectorExplorer() {
   const [loading, setLoading] = useState(true);
   const [sectors, setSectors] = useState([]);
   const [sectorCounts, setSectorCounts] = useState({});
+  const [sectorIndices, setSectorIndices] = useState({});
   const [sector, setSector] = useState('all');
   const [mcapRange, setMcapRange] = useState('all');
   const [sortBy, setSortBy] = useState('market_cap');
@@ -110,13 +111,18 @@ export default function SectorExplorer() {
   const [chartSymbol, setChartSymbol] = useState(null);
   const [showAllSectors, setShowAllSectors] = useState(false);
   const [strategies, setStrategies] = useState([]);
+  const [strategiesError, setStrategiesError] = useState(null);
   const [runStrategyId, setRunStrategyId] = useState('');
   const [groupSectors, setGroupSectors] = useState(true);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    api.get('/strategies/?market_type=stocks').then(r => setStrategies(r.data)).catch(() => {});
+  const loadStrategies = useCallback(() => {
+    setStrategiesError(null);
+    api.get('/strategies/?market_type=stocks')
+      .then(r => { setStrategies(r.data || []); setStrategiesError(null); })
+      .catch(e => { setStrategies([]); setStrategiesError(e.message || 'Failed to load strategies'); });
   }, []);
+  useEffect(() => { loadStrategies(); }, [loadStrategies]);
 
   const fetchData = useCallback((p, sec, mr, sb, sd, grouped) => {
     setLoading(true);
@@ -134,6 +140,7 @@ export default function SectorExplorer() {
       setPage(r.data.page);
       setSectors(r.data.sectors || []);
       setSectorCounts(r.data.sector_counts || {});
+      setSectorIndices(r.data.sector_indices || {});
       setLoading(false);
     }).catch(() => setLoading(false));
   }, []);
@@ -198,7 +205,7 @@ export default function SectorExplorer() {
       <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
         <SectorChip label="All" count={Object.values(sectorCounts).reduce((a, b) => a + b, 0)} active={sector === 'all'} onClick={() => handleSector('all')} />
         {displayedSectors.map(s => (
-          <SectorChip key={s} label={s.length > 24 ? s.slice(0, 24) + '...' : s} fullLabel={s} count={sectorCounts[s] || 0} active={sector === s} onClick={() => handleSector(s)} />
+          <SectorChip key={s} label={s.length > 24 ? s.slice(0, 24) + '...' : s} fullLabel={s} count={sectorCounts[s] || 0} indexLabel={sectorIndices[s]} active={sector === s} onClick={() => handleSector(s)} />
         ))}
         {hasMore && !showAllSectors && (
           <button onClick={() => setShowAllSectors(true)} style={{
@@ -223,7 +230,11 @@ export default function SectorExplorer() {
 
         <span style={{ color: '#475569', margin: '0 0.25rem' }}>|</span>
 
-        {strategies.length > 0 && (
+        {strategiesError ? (
+          <span style={{ color: '#f87171', fontSize: '0.8rem' }}>{strategiesError}
+            <button onClick={loadStrategies} style={{ marginLeft: '0.4rem', textDecoration: 'underline', background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '0.8rem' }}>Retry</button>
+          </span>
+        ) : strategies.length > 0 ? (
           <>
             <select value={runStrategyId} onChange={e => setRunStrategyId(e.target.value)}
               style={{ padding: '0.4rem 0.5rem', fontSize: '0.8rem', width: 'auto', maxWidth: 220 }}>
@@ -236,7 +247,7 @@ export default function SectorExplorer() {
               border: 'none', cursor: runStrategyId ? 'pointer' : 'default', opacity: runStrategyId ? 1 : 0.5,
             }}>Run</button>
           </>
-        )}
+        ) : null}
 
         <span style={{ color: '#64748b', fontSize: '0.8rem', marginLeft: '0.5rem' }}>
           {total} stock{total !== 1 ? 's' : ''}
@@ -329,15 +340,17 @@ function Th({ children, align, clickable, onClick }) {
   );
 }
 
-function SectorChip({ label, fullLabel, count, active, onClick }) {
+function SectorChip({ label, fullLabel, count, indexLabel, active, onClick }) {
+  const title = fullLabel || label;
   return (
-    <button onClick={onClick} title={fullLabel || label} style={{
+    <button onClick={onClick} title={indexLabel ? `${title} — Index: ${indexLabel}` : title} style={{
       padding: '0.25rem 0.55rem', borderRadius: '8px', fontSize: '0.7rem', fontWeight: active ? 700 : 500,
       border: active ? '1.5px solid #6366f1' : '1px solid #334155',
       background: active ? '#6366f1' : '#1e293b',
       color: active ? 'white' : '#94a3b8', cursor: 'pointer', transition: 'all 0.15s',
     }}>
       {label} <span style={{ opacity: 0.6, fontSize: '0.6rem' }}>({count})</span>
+      {indexLabel && <span style={{ marginLeft: '0.25rem', opacity: active ? 0.85 : 0.55, fontSize: '0.6rem', fontFamily: 'monospace' }} title={`Sector index: ${indexLabel}`}>{indexLabel}</span>}
     </button>
   );
 }

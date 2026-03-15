@@ -34,22 +34,28 @@ body {
 .container {
   max-width: 1440px;
   margin: 0 auto;
-  padding: 1.5rem 2rem;
+  padding: 1rem;
+}
+@media (min-width: 768px) {
+  .container { padding: 1.5rem 2rem; }
 }
 
 /* Nav */
 nav {
   background: var(--bg-card);
-  padding: 0 2rem;
-  height: 56px;
+  padding: 0 1rem;
+  min-height: 56px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  flex-wrap: wrap;
   position: sticky;
   top: 0;
   z-index: 100;
   backdrop-filter: blur(12px);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 nav a {

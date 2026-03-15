@@ -171,10 +171,13 @@ function LatestResultsPanel({ onSelectSymbol }) {
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(7);
   const [page, setPage] = useState(1);
+  const [source, setSource] = useState('all');
 
-  const fetchLatest = useCallback((p, d) => {
+  const fetchLatest = useCallback((p, d, src) => {
     setLoading(true);
-    api.get(`/financials/latest-results?days=${d}&page=${p}&page_size=15`)
+    let url = `/financials/latest-results?days=${d}&page=${p}&page_size=15`;
+    if (src && src !== 'all') url += `&source=${encodeURIComponent(src)}`;
+    api.get(url)
       .then(r => {
         setResults(r.data.results);
         setTotal(r.data.total);
@@ -184,7 +187,7 @@ function LatestResultsPanel({ onSelectSymbol }) {
       .catch(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchLatest(1, days); }, [days, fetchLatest]);
+  useEffect(() => { fetchLatest(1, days, source); }, [days, source, fetchLatest]);
 
   const totalPages = Math.ceil(total / 15);
 
@@ -205,9 +208,24 @@ function LatestResultsPanel({ onSelectSymbol }) {
             background: 'rgba(251,191,36,0.15)', color: '#fbbf24',
           }}>{total}</span>
         </div>
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ color: '#475569', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase' }}>Source</span>
+          {[
+            { key: 'all', label: 'All' },
+            { key: 'nse', label: 'NSE' },
+            { key: 'screener.in', label: 'Screener.in' },
+          ].map(s => (
+            <button key={s.key} onClick={() => { setSource(s.key); setPage(1); }} style={{
+              padding: '0.25rem 0.5rem', borderRadius: '5px', fontSize: '0.68rem', fontWeight: 600,
+              border: source === s.key ? '1.5px solid #6366f1' : '1px solid #334155',
+              background: source === s.key ? '#6366f1' : '#334155',
+              color: source === s.key ? 'white' : '#94a3b8', cursor: 'pointer',
+            }}>{s.label}</button>
+          ))}
+          <span style={{ color: '#334155', margin: '0 0.2rem' }}>|</span>
+          <span style={{ color: '#475569', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase' }}>Days</span>
           {[7, 14, 30].map(d => (
-            <button key={d} onClick={() => { setDays(d); }} style={{
+            <button key={d} onClick={() => { setDays(d); setPage(1); }} style={{
               padding: '0.25rem 0.5rem', borderRadius: '5px', fontSize: '0.68rem', fontWeight: 600,
               border: d === days ? '1.5px solid #6366f1' : '1px solid #334155',
               background: d === days ? '#6366f1' : '#334155',
@@ -221,10 +239,25 @@ function LatestResultsPanel({ onSelectSymbol }) {
         <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b', animation: 'pulse 1.5s infinite' }}>Loading...</div>
       ) : results.length === 0 ? (
         <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>
-          No result announcements in the last {days} days. Run the scraper:
-          <code style={{ display: 'block', marginTop: '0.5rem', padding: '0.4rem', background: '#0f172a', borderRadius: '6px', color: '#818cf8', fontSize: '0.75rem' }}>
-            cd data-store && python scrape_latest_results.py --days {days}
-          </code>
+          {source === 'screener.in' ? (
+            <>
+              <p style={{ margin: '0 0 0.5rem' }}>No Screener.in results in the last {days} days.</p>
+              <p style={{ margin: 0, fontSize: '0.8rem' }}>
+                Screener.in data comes from the <strong>Financial Results</strong> scraper (Admin page) — it adds entries when scraping company pages.
+                Their <a href="https://www.screener.in/results/latest/" target="_blank" rel="noopener noreferrer" style={{ color: '#818cf8' }}>/results/latest/</a> page requires login and cannot be scraped directly.
+              </p>
+            </>
+          ) : source === 'nse' ? (
+            <>
+              <p style={{ margin: '0 0 0.5rem' }}>No NSE announcements in the last {days} days.</p>
+              <p style={{ margin: 0, fontSize: '0.8rem' }}>Run the <strong>Latest Results</strong> scraper from the Admin page (or select &quot;All&quot; to see combined results).</p>
+            </>
+          ) : (
+            <>
+              <p style={{ margin: '0 0 0.5rem' }}>No result announcements in the last {days} days.</p>
+              <p style={{ margin: 0, fontSize: '0.8rem' }}>Run the <strong>Latest Results</strong> scraper from the Admin page.</p>
+            </>
+          )}
         </div>
       ) : (
         <>
@@ -287,12 +320,12 @@ function LatestResultsPanel({ onSelectSymbol }) {
 
           {totalPages > 1 && (
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.3rem', padding: '0.6rem' }}>
-              <PgBtn disabled={page <= 1} onClick={() => fetchLatest(page - 1, days)}>←</PgBtn>
+              <PgBtn disabled={page <= 1} onClick={() => fetchLatest(page - 1, days, source)}>←</PgBtn>
               {pgNums(page, totalPages).map((p, i) =>
                 p === '...' ? <span key={`e${i}`} style={{ color: '#475569', padding: '0 0.2rem', fontSize: '0.8rem' }}>...</span> :
-                <PgBtn key={p} active={p === page} onClick={() => fetchLatest(p, days)}>{p}</PgBtn>
+                <PgBtn key={p} active={p === page} onClick={() => fetchLatest(p, days, source)}>{p}</PgBtn>
               )}
-              <PgBtn disabled={page >= totalPages} onClick={() => fetchLatest(page + 1, days)}>→</PgBtn>
+              <PgBtn disabled={page >= totalPages} onClick={() => fetchLatest(page + 1, days, source)}>→</PgBtn>
             </div>
           )}
         </>
