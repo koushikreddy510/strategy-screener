@@ -431,7 +431,26 @@ def get_structural_patterns(
 def get_52w_patterns(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    near_pct: Optional[float] = Query(None, description="Filter to within X% of 52w high (e.g. 5)"),
+    near_pct: Optional[float] = Query(
+        None,
+        description="Within X% of 52w high (0–X% below high). Ignored if pct_from_high_min/max set.",
+    ),
+    pct_from_high_min: Optional[float] = Query(
+        None,
+        ge=0,
+        le=100,
+        description="Min %% below 52w high (e.g. 5 with max=10 for 5–10%% band)",
+    ),
+    pct_from_high_max: Optional[float] = Query(
+        None,
+        ge=0,
+        le=100,
+        description="Max %% below 52w high",
+    ),
+    at_52w_high: bool = Query(
+        False,
+        description="If true, stocks within ~1%% of 52w high (overridable with pct_from_high_min/max)",
+    ),
     cap_filter: Optional[str] = None,
     sector_filter: Optional[str] = None,
     sort_by: str = Query("pct_from_high", pattern="^(pct_from_high|pct_from_low|close|market_cap)$"),
@@ -441,7 +460,11 @@ def get_52w_patterns(
 ):
     return scan_52w_high_low(
         page=page, page_size=page_size,
-        near_pct=near_pct, cap_filter=cap_filter, sector_filter=sector_filter,
+        near_pct=near_pct,
+        pct_from_high_min=pct_from_high_min,
+        pct_from_high_max=pct_from_high_max,
+        at_52w_high=at_52w_high,
+        cap_filter=cap_filter, sector_filter=sector_filter,
         sort_by=sort_by, sort_dir=sort_dir,
         chart_bars=chart_bars, chart_timeframe=chart_timeframe,
     )

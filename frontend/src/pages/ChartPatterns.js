@@ -267,6 +267,7 @@ export default function ChartPatterns() {
   const [patternCounts, setPatternCounts] = useState({});
   const [signalCounts, setSignalCounts] = useState({});
   const [sectors, setSectors] = useState([]);
+  const [parentSectors, setParentSectors] = useState([]);
   const [signal, setSignal] = useState('all');
   const [pattern, setPattern] = useState('all');
   const [capFilter, setCapFilter] = useState('all');
@@ -284,9 +285,11 @@ export default function ChartPatterns() {
     const s = sc ?? screen;
     const t = tf ?? timeframe;
     const b = cb ?? chartBars;
-    if (s === '52w' || s === 'near52w') {
+    if (s === '52w' || s === 'near52w' || s === 'band_5_10' || s === 'at_high') {
       let url = `/patterns/52w?page=${p}&page_size=${PAGE_SIZE}&sort_by=${sb}&sort_dir=${sd}&chart_bars=${b}&chart_timeframe=${t}`;
       if (s === 'near52w') url += '&near_pct=5';
+      if (s === 'band_5_10') url += '&pct_from_high_min=5&pct_from_high_max=10';
+      if (s === 'at_high') url += '&at_52w_high=true';
       if (cf && cf !== 'all') url += `&cap_filter=${cf}`;
       if (sf && sf !== 'all') url += `&sector_filter=${encodeURIComponent(sf)}`;
       api.get(url).then(r => {
@@ -297,6 +300,7 @@ export default function ChartPatterns() {
         setPatternCounts({});
         setSignalCounts({});
         setSectors(r.data.sectors || []);
+        setParentSectors(r.data.parent_sectors || []);
         setLoading(false);
       }).catch(() => setLoading(false));
     } else {
@@ -313,13 +317,14 @@ export default function ChartPatterns() {
         setPatternCounts(r.data.pattern_counts || {});
         setSignalCounts(r.data.signal_counts || {});
         setSectors(r.data.sectors || []);
+        setParentSectors(r.data.parent_sectors || []);
         setLoading(false);
       }).catch(() => setLoading(false));
     }
   }, [screen, timeframe, chartBars]);
 
   useEffect(() => {
-    const defSort = screen === '52w' || screen === 'near52w' ? 'pct_from_high' : 'strength';
+    const defSort = ['52w', 'near52w', 'band_5_10', 'at_high'].includes(screen) ? 'pct_from_high' : 'strength';
     fetchData(1, signal, pattern, capFilter, sectorFilter, defSort, sortDir, lookback, screen, timeframe, chartBars);
   }, [screen]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -334,7 +339,10 @@ export default function ChartPatterns() {
   const handleCap = (v) => { setCapFilter(v); fetchData(1, signal, pattern, v, sectorFilter, sortBy, sortDir, lookback); };
   const handleSector = (v) => { setSectorFilter(v); fetchData(1, signal, pattern, capFilter, v, sortBy, sortDir, lookback); };
   const handleLookback = (v) => { setLookback(v); fetchData(1, signal, pattern, capFilter, sectorFilter, sortBy, sortDir, v); };
-  const handleScreen = (v) => { setScreen(v); setSortBy(v === '52w' || v === 'near52w' ? 'pct_from_high' : 'strength'); };
+  const handleScreen = (v) => {
+    setScreen(v);
+    setSortBy(['52w', 'near52w', 'band_5_10', 'at_high'].includes(v) ? 'pct_from_high' : 'strength');
+  };
   const handleTimeframe = (v) => { setTimeframe(v); fetchData(1, signal, pattern, capFilter, sectorFilter, sortBy, sortDir, lookback, undefined, v); };
   const handleChartBars = (v) => { setChartBars(v); fetchData(1, signal, pattern, capFilter, sectorFilter, sortBy, sortDir, lookback, undefined, undefined, v); };
 
@@ -349,7 +357,7 @@ export default function ChartPatterns() {
   const bullCount = signalCounts.bullish || 0;
   const bearCount = signalCounts.bearish || 0;
   const neutCount = signalCounts.neutral || 0;
-  const is52wScreen = screen === '52w' || screen === 'near52w';
+  const is52wScreen = ['52w', 'near52w', 'band_5_10', 'at_high'].includes(screen);
 
   return (
     <div>
@@ -366,7 +374,7 @@ export default function ChartPatterns() {
       <div style={{ marginBottom: '1rem' }}>
         <h1 style={{ marginBottom: '0.15rem', fontSize: '1.3rem' }}>Chart Patterns</h1>
         <p style={{ color: '#64748b', margin: 0, fontSize: '0.85rem' }}>
-          Structural patterns, 52-week high/low, near 52w high · 1D & 1W (1W resampled from 1D)
+          Structural patterns, 52-week high/low, distance bands, sector filters (NSE + parent groups) · 1D & 1W
         </p>
       </div>
 
@@ -388,7 +396,19 @@ export default function ChartPatterns() {
           border: screen === 'near52w' ? '1.5px solid #6366f1' : '1px solid #334155',
           background: screen === 'near52w' ? '#6366f1' : '#1e293b',
           color: screen === 'near52w' ? 'white' : '#94a3b8', cursor: 'pointer',
-        }}>Near 52w High (≤5%)</button>
+        }}>Near High (≤5%)</button>
+        <button onClick={() => handleScreen('band_5_10')} style={{
+          padding: '0.35rem 0.7rem', borderRadius: '8px', fontSize: '0.8rem', fontWeight: 600,
+          border: screen === 'band_5_10' ? '1.5px solid #6366f1' : '1px solid #334155',
+          background: screen === 'band_5_10' ? '#6366f1' : '#1e293b',
+          color: screen === 'band_5_10' ? 'white' : '#94a3b8', cursor: 'pointer',
+        }}>5–10% Below High</button>
+        <button onClick={() => handleScreen('at_high')} style={{
+          padding: '0.35rem 0.7rem', borderRadius: '8px', fontSize: '0.8rem', fontWeight: 600,
+          border: screen === 'at_high' ? '1.5px solid #6366f1' : '1px solid #334155',
+          background: screen === 'at_high' ? '#6366f1' : '#1e293b',
+          color: screen === 'at_high' ? 'white' : '#94a3b8', cursor: 'pointer',
+        }}>At 52w High (~1%)</button>
       </div>
 
       {!is52wScreen && (
@@ -427,10 +447,19 @@ export default function ChartPatterns() {
           <option value="small_cap">Small Cap</option>
           <option value="micro_cap">Micro Cap</option>
         </select>
-        {sectors.length > 0 && (
-          <select value={sectorFilter} onChange={e => handleSector(e.target.value)} style={{ padding: '0.4rem 0.5rem', fontSize: '0.8rem', width: 'auto', maxWidth: 200 }}>
-            <option value="all">All Sectors</option>
-            {sectors.map(s => <option key={s} value={s}>{s}</option>)}
+        {(sectors.length > 0 || parentSectors.length > 0) && (
+          <select value={sectorFilter} onChange={e => handleSector(e.target.value)} style={{ padding: '0.4rem 0.5rem', fontSize: '0.8rem', width: 'auto', maxWidth: 260 }}>
+            <option value="all">All sectors</option>
+            {parentSectors.length > 0 && (
+              <optgroup label="Parent groups (sector rotation)">
+                {parentSectors.map(ps => <option key={`p:${ps}`} value={ps}>{ps}</option>)}
+              </optgroup>
+            )}
+            {sectors.length > 0 && (
+              <optgroup label="NSE industry (granular)">
+                {sectors.map(s => <option key={s} value={s}>{s}</option>)}
+              </optgroup>
+            )}
           </select>
         )}
         {!is52wScreen && (
@@ -463,17 +492,18 @@ export default function ChartPatterns() {
                 {!is52wScreen && <Th clickable onClick={() => handleSort('volume')}>Vol{sortIcon('volume')}</Th>}
                 <Th clickable onClick={() => handleSort('market_cap')}>MCap{sortIcon('market_cap')}</Th>
                 <Th>Cap</Th>
+                {is52wScreen && <Th>Parent</Th>}
                 <Th>Sector</Th>
                 <Th>View</Th>
               </tr>
             </thead>
             <tbody>
               {loading && results.length === 0 ? (
-                <tr><td colSpan={14} style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+                <tr><td colSpan={is52wScreen ? 13 : 12} style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
                   <span style={{ animation: 'pulse 1.5s infinite' }}>Scanning...</span>
                 </td></tr>
               ) : results.length === 0 ? (
-                <tr><td colSpan={14} style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>No results</td></tr>
+                <tr><td colSpan={is52wScreen ? 13 : 12} style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>No results</td></tr>
               ) : results.map((r, idx) => {
                 const n = (page - 1) * PAGE_SIZE + idx + 1;
                 return (
@@ -496,9 +526,10 @@ export default function ChartPatterns() {
                     {!is52wScreen && <Td>{r.volume >= 1e6 ? `${(r.volume / 1e6).toFixed(1)}M` : `${(r.volume / 1e3).toFixed(0)}K`}</Td>}
                     <Td small>{formatMCap(r.market_cap)}</Td>
                     <Td><CapBadge category={r.market_cap_category} /></Td>
-                    <Td small muted>{r.sector ? (r.sector.length > 16 ? r.sector.slice(0, 16) + '...' : r.sector) : '-'}</Td>
+                    {is52wScreen && <Td small>{r.parent_sector || '-'}</Td>}
+                    <Td small muted>{r.sector ? (r.sector.length > 18 ? r.sector.slice(0, 18) + '…' : r.sector) : '-'}</Td>
                     <Td>
-                      <button onClick={() => setViewRow(r)} style={{
+                      <button onClick={() => setViewRow({ ...r, pattern: r.pattern || '52-Week' })} style={{
                         padding: '0.2rem 0.5rem', borderRadius: '6px', fontSize: '0.7rem', fontWeight: 600,
                         background: 'rgba(99,102,241,0.12)', border: '1px solid #6366f1', color: '#818cf8', cursor: 'pointer',
                       }}>View</button>

@@ -902,6 +902,9 @@ def scan_52w_high_low(
     page: int = 1,
     page_size: int = 20,
     near_pct: Optional[float] = None,
+    pct_from_high_min: Optional[float] = None,
+    pct_from_high_max: Optional[float] = None,
+    at_52w_high: bool = False,
     cap_filter: Optional[str] = None,
     sector_filter: Optional[str] = None,
     sort_by: str = "pct_from_high",
@@ -909,8 +912,18 @@ def scan_52w_high_low(
     chart_bars: int = 120,
     chart_timeframe: str = "1D",
 ) -> Dict[str, Any]:
-    """Scan all stocks for 52-week high/low. near_pct: filter to within X% of 52w high (e.g. 5 = within 5%)."""
-    cache_key = f"52w:{near_pct}:{chart_bars}:{chart_timeframe}"
+    """Scan all stocks for 52-week high/low.
+
+    Distance from 52w high (pct_from_high = how far % close is below the 52w high):
+    - near_pct: legacy — keep 0 <= pct_from_high <= near_pct (e.g. 5 = within 5% of high).
+    - pct_from_high_min / pct_from_high_max: band (e.g. 5 and 10 = 5–10% below high).
+    - at_52w_high: shorthand for within ~1% of the 52w high (tight to the high).
+    If none of these are set, all stocks with valid 52w data are included (then cap/sector filters apply).
+    """
+    from sector_groups import get_parent_sector, PARENT_SECTORS
+
+    # Full universe scan cached once per chart settings (not per distance filter).
+    cache_key = f"52w_full:{chart_bars}:{chart_timeframe}"
     cached = _get_cached(cache_key)
 
     if cached is None:
@@ -948,6 +961,7 @@ def scan_52w_high_low(
 
             info = sym_info_map.get(sym, {})
             mcap = info.get("market_cap", 0)
+            sec = info.get("sector", "")
             results.append({
                 "symbol": sym,
                 "company_name": info.get("name", ""),
@@ -958,20 +972,36 @@ def scan_52w_high_low(
                 "pct_from_low": round(pct_from_low, 2),
                 "market_cap": mcap,
                 "market_cap_category": categorize_market_cap(mcap),
-                "sector": info.get("sector", ""),
+                "sector": sec,
+                "parent_sector": get_parent_sector(sec),
                 "chart_data": chart_data,
             })
 
-        if near_pct is not None:
-            results = [r for r in results if r["pct_from_high"] <= near_pct]
         _set_cache(cache_key, results)
         cached = results
 
     filtered = list(cached)
+
+    # Distance from 52w high
+    lo: Optional[float] = None
+    hi: Optional[float] = None
+    if at_52w_high:
+        lo = pct_from_high_min if pct_from_high_min is not None else 0.0
+        hi = pct_from_high_max if pct_from_high_max is not None else 1.0
+    elif pct_from_high_min is not None or pct_from_high_max is not None:
+        lo = pct_from_high_min
+        hi = pct_from_high_max
+    elif near_pct is not None:
+        lo, hi = 0.0, near_pct
+
+    if lo is not None:
+        filtered = [r for r in filtered if r["pct_from_high"] >= lo]
+    if hi is not None:
+        filtered = [r for r in filtered if r["pct_from_high"] <= hi]
+
     if cap_filter and cap_filter != "all":
         filtered = [r for r in filtered if r["market_cap_category"].lower().replace(" ", "_") == cap_filter]
     if sector_filter and sector_filter != "all":
-        from sector_groups import get_parent_sector, PARENT_SECTORS
         if sector_filter in PARENT_SECTORS:
             filtered = [r for r in filtered if get_parent_sector(r.get("sector", "")) == sector_filter]
         else:
@@ -988,6 +1018,17 @@ def scan_52w_high_low(
         filtered.sort(key=lambda r: r["market_cap"], reverse=reverse)
 
     all_sectors = sorted(set(r.get("sector", "") for r in cached if r.get("sector")))
+    parent_present = {get_parent_sector(r.get("sector", "")) for r in cached if r.get("sector")}
+    parent_sectors = [p for p in PARENT_SECTORS if p in parent_present]
+
+    screen_label = "52w_high_low"
+    if at_52w_high:
+        screen_label = "at_52w_high"
+    elif pct_from_high_min is not None or pct_from_high_max is not None:
+        screen_label = "52w_high_band"
+    elif near_pct is not None:
+        screen_label = "near_52w_high"
+
     total = len(filtered)
     start = (page - 1) * page_size
     end = start + page_size
@@ -997,7 +1038,8 @@ def scan_52w_high_low(
         "page": page,
         "page_size": page_size,
         "sectors": all_sectors,
-        "screen": "near_52w_high" if near_pct else "52w_high_low",
+        "parent_sectors": parent_sectors,
+        "screen": screen_label,
     }
 
 
@@ -1125,8 +1167,12 @@ def scan_structural_patterns(
     elif sort_by == "volume":
         filtered.sort(key=lambda r: r["volume"], reverse=reverse)
 
+    from sector_groups import get_parent_sector as _gps, PARENT_SECTORS as _PS
+
     all_patterns = sorted(set(r["pattern"] for r in cached))
     all_sectors = sorted(set(r["sector"] for r in cached if r.get("sector")))
+    _pp = {_gps(r.get("sector", "")) for r in cached if r.get("sector")}
+    parent_sectors_struct = [p for p in _PS if p in _pp]
     pattern_counts = {}
     signal_counts = {"bullish": 0, "bearish": 0, "neutral": 0}
     for r in cached:
@@ -1145,6 +1191,7 @@ def scan_structural_patterns(
         "pattern_counts": pattern_counts,
         "signal_counts": signal_counts,
         "sectors": all_sectors,
+        "parent_sectors": parent_sectors_struct,
     }
 
 

@@ -12,6 +12,7 @@ import CandlePatterns from './pages/CandlePatterns';
 import ChartPatterns from './pages/ChartPatterns';
 import Financials from './pages/Financials';
 import Trading from './pages/Trading';
+import BacktestReplay from './pages/BacktestReplay';
 import Admin from './pages/Admin';
 
 function NavBar() {
@@ -37,6 +38,7 @@ function NavBar() {
   const isChartPatterns = path === '/chart-patterns';
   const isFinancials = path === '/financials';
   const isTrading = path === '/trading';
+  const isBacktest = path === '/backtest';
   const isAdmin = path === '/admin';
 
   return (
@@ -66,6 +68,9 @@ function NavBar() {
       </Link>
       <Link to="/trading" style={tabStyle(isTrading)}>
         Trading
+      </Link>
+      <Link to="/backtest" style={tabStyle(isBacktest)}>
+        Backtest
       </Link>
       <Link to="/admin" style={tabStyle(isAdmin)}>
         Admin
@@ -105,6 +110,7 @@ function App() {
           <Route path="/chart-patterns" element={<ChartPatterns />} />
           <Route path="/financials" element={<Financials />} />
           <Route path="/trading" element={<Trading />} />
+          <Route path="/backtest" element={<BacktestReplay />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="*" element={<StrategiesList />} />
         </Routes>

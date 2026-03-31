@@ -4,8 +4,19 @@ import axios from 'axios';
 const TAB_ORDERS = 'orders';
 const TAB_POSITIONS = 'positions';
 const TAB_PNL = 'pnl';
+const TAB_STRATEGIES = 'strategies';
 
 const tradingApiBase = process.env.REACT_APP_TRADING_API_URL || '';
+
+const UNIVERSE_SOURCES = [
+  { value: 'screener_filtered', label: 'Screener filtered (/run/{id})' },
+  { value: 'full_universe', label: 'Full universe (market DB)' },
+  { value: 'pattern_52w', label: '52w band (config_json)' },
+  { value: 'screen_52w', label: 'Screen: 52w chart' },
+  { value: 'screen_structural', label: 'Screen: structural patterns' },
+  { value: 'screen_candle', label: 'Screen: candle patterns' },
+  { value: 'union_screener_screen', label: 'Union: screener + one screen' },
+];
 
 export default function Trading() {
   const [tab, setTab] = useState(TAB_ORDERS);
@@ -17,6 +28,13 @@ export default function Trading() {
   const [error, setError] = useState(null);
   const [accountFilter, setAccountFilter] = useState('');
   const [orderStatusFilter, setOrderStatusFilter] = useState('');
+  const [executionStrategies, setExecutionStrategies] = useState([]);
+  const [accountStrategies, setAccountStrategies] = useState([]);
+  const [strategyToggleBusy, setStrategyToggleBusy] = useState(null);
+  const [universeDrafts, setUniverseDrafts] = useState({});
+  const [screenerDrafts, setScreenerDrafts] = useState({});
+  const [universeSavingId, setUniverseSavingId] = useState(null);
+  const [universePreview, setUniversePreview] = useState(null);
 
   const tradingApi = tradingApiBase ? axios.create({ baseURL: tradingApiBase }) : null;
 
@@ -59,13 +77,124 @@ export default function Trading() {
       .finally(() => setLoading(false));
   }, [tradingApi, accountFilter]);
 
+  const fetchExecutionStrategies = useCallback(() => {
+    if (!tradingApi) return;
+    setLoading(true);
+    tradingApi.get('/trading/execution-strategies')
+      .then(r => { setExecutionStrategies(r.data.strategies || []); setError(r.data.error); })
+      .catch(e => { setExecutionStrategies([]); setError(e.message); })
+      .finally(() => setLoading(false));
+  }, [tradingApi]);
+
+  const fetchAccountStrategies = useCallback(() => {
+    if (!tradingApi || !accountFilter) {
+      setAccountStrategies([]);
+      return;
+    }
+    tradingApi.get(`/trading/accounts/${accountFilter}/execution-strategies`)
+      .then(r => setAccountStrategies(r.data.strategies || []))
+      .catch(() => setAccountStrategies([]));
+  }, [tradingApi, accountFilter]);
+
   useEffect(() => { fetchAccounts(); }, [fetchAccounts]);
 
   useEffect(() => {
     if (tab === TAB_ORDERS) fetchOrders();
     else if (tab === TAB_POSITIONS) fetchPositions();
     else if (tab === TAB_PNL) fetchPnl();
-  }, [tab, accountFilter, orderStatusFilter, fetchOrders, fetchPositions, fetchPnl]);
+    else if (tab === TAB_STRATEGIES) {
+      fetchExecutionStrategies();
+      fetchAccountStrategies();
+    }
+  }, [tab, accountFilter, orderStatusFilter, fetchOrders, fetchPositions, fetchPnl, fetchExecutionStrategies, fetchAccountStrategies]);
+
+  const toggleAccountStrategy = (strategyId, enabled) => {
+    if (!tradingApi || !accountFilter) return;
+    setStrategyToggleBusy(strategyId);
+    tradingApi.patch(`/trading/accounts/${accountFilter}/execution-strategies/${strategyId}`, { is_enabled: enabled })
+      .then(() => fetchAccountStrategies())
+      .catch(e => setError(e.message))
+      .finally(() => setStrategyToggleBusy(null));
+  };
+
+  const saveStrategyUniverse = (strategy) => {
+    if (!tradingApi) return;
+    const payload = {};
+    const nextU = universeDrafts[strategy.id];
+    if (nextU !== undefined && nextU !== strategy.universe_source) {
+      payload.universe_source = nextU;
+    }
+    const scDraft = screenerDrafts[strategy.id];
+    if (scDraft !== undefined) {
+      const t = String(scDraft).trim();
+      const nextSid = t === '' ? null : parseInt(t, 10);
+      if (t !== '' && Number.isNaN(nextSid)) {
+        setError('Screener strategy ID must be empty or a valid integer.');
+        return;
+      }
+      const cur = strategy.screener_strategy_id ?? null;
+      if (nextSid !== cur) payload.screener_strategy_id = nextSid;
+    }
+    if (Object.keys(payload).length === 0) return;
+    setUniverseSavingId(strategy.id);
+    tradingApi.patch(`/trading/execution-strategies/${strategy.id}`, payload)
+      .then(() => {
+        setUniverseDrafts(d => {
+          const copy = { ...d };
+          delete copy[strategy.id];
+          return copy;
+        });
+        setScreenerDrafts(d => {
+          const copy = { ...d };
+          delete copy[strategy.id];
+          return copy;
+        });
+        fetchExecutionStrategies();
+      })
+      .catch(e => {
+        const msg = e.response?.data?.detail || e.message;
+        setError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      })
+      .finally(() => setUniverseSavingId(null));
+  };
+
+  const openUniversePreview = (strategy) => {
+    if (!tradingApi) return;
+    setUniversePreview({ loading: true, title: strategy.display_name, strategyId: strategy.id });
+    tradingApi.get(`/trading/execution-strategies/${strategy.id}/universe-preview?limit=250`)
+      .then(r => setUniversePreview({
+        loading: false,
+        title: strategy.display_name,
+        strategyId: strategy.id,
+        symbolCount: r.data.symbol_count,
+        truncated: r.data.truncated,
+        symbols: r.data.symbols || [],
+        meta: r.data.meta || {},
+      }))
+      .catch(e => {
+        const msg = e.response?.data?.detail || e.message;
+        setUniversePreview({
+          loading: false,
+          title: strategy.display_name,
+          strategyId: strategy.id,
+          error: typeof msg === 'string' ? msg : JSON.stringify(msg),
+        });
+      });
+  };
+
+  const groupPositionsByStrategy = (list) => {
+    const map = new Map();
+    for (const p of list) {
+      const slug = p.execution_strategy_slug || '';
+      const key = slug || '_none';
+      const title = slug
+        ? (p.execution_strategy_name || slug)
+        : 'Unassigned (broker sync)';
+      if (!map.has(key)) map.set(key, { title, slug: slug || null, rows: [] });
+      map.get(key).rows.push(p);
+    }
+    return Array.from(map.values());
+  };
 
   const cardStyle = {
     background: '#1e293b',
@@ -139,7 +268,7 @@ export default function Trading() {
         flexWrap: 'wrap',
         alignItems: 'center',
       }}>
-        {[TAB_ORDERS, TAB_POSITIONS, TAB_PNL].map(t => (
+        {[TAB_ORDERS, TAB_POSITIONS, TAB_PNL, TAB_STRATEGIES].map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -152,10 +281,10 @@ export default function Trading() {
               background: tab === t ? '#6366f1' : '#334155',
               color: tab === t ? 'white' : '#94a3b8',
               cursor: 'pointer',
-              textTransform: 'capitalize',
+              textTransform: t === TAB_STRATEGIES ? 'none' : 'capitalize',
             }}
           >
-            {t}
+            {t === TAB_STRATEGIES ? 'Strategies' : t}
           </button>
         ))}
         <span style={{ width: '1rem' }} />
@@ -202,7 +331,7 @@ export default function Trading() {
         )}
       </div>
 
-      {loading && orders.length === 0 && positions.length === 0 && snapshots.length === 0 ? (
+      {loading && orders.length === 0 && positions.length === 0 && snapshots.length === 0 && (tab !== TAB_STRATEGIES || executionStrategies.length === 0) ? (
         <div style={{ padding: '3rem', textAlign: 'center', color: '#64748b' }}>Loading...</div>
       ) : tab === TAB_ORDERS ? (
         <div style={cardStyle}>
@@ -237,35 +366,322 @@ export default function Trading() {
           </div>
         </div>
       ) : tab === TAB_POSITIONS ? (
-        <div style={cardStyle}>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
-              <thead>
-                <tr>
-                  {['Account', 'Symbol', 'Side', 'Qty', 'Avg Price', 'LTP', 'P&L', 'Synced'].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {positions.length === 0 ? (
-                  <tr><td colSpan={8} style={{ ...tdStyle, textAlign: 'center', color: '#64748b', padding: '2rem' }}>No open positions.</td></tr>
-                ) : positions.map(p => (
-                  <tr key={p.id}>
-                    <td style={tdStyle}>{p.display_name || p.broker}</td>
-                    <td style={tdStyle}>{p.symbol}</td>
-                    <td style={{ ...tdStyle, color: p.side === 'BUY' ? '#4ade80' : '#f87171', fontWeight: 600 }}>{p.side}</td>
-                    <td style={tdStyle}>{p.quantity}</td>
-                    <td style={tdStyle}>{Number(p.avg_price).toFixed(2)}</td>
-                    <td style={tdStyle}>{p.current_price != null ? Number(p.current_price).toFixed(2) : '-'}</td>
-                    <td style={{ ...tdStyle, color: (p.unrealized_pnl || 0) >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
-                      {p.unrealized_pnl != null ? Number(p.unrealized_pnl).toFixed(2) : '-'}
-                    </td>
-                    <td style={{ ...tdStyle, color: '#94a3b8', fontSize: '0.72rem' }}>{p.last_synced_at ? new Date(p.last_synced_at).toLocaleString() : '-'}</td>
+        <div>
+          <p style={{ color: '#94a3b8', fontSize: '0.78rem', margin: '0 0 0.75rem', lineHeight: 1.45 }}>
+            Positions are <strong style={{ color: '#cbd5e1' }}>one row per symbol per account</strong> from the broker. Strategy tags come from{' '}
+            <code style={{ background: '#0f172a', padding: '1px 4px', borderRadius: '4px' }}>execution_strategy_id</code> when set (e.g. after automated entries).{' '}
+            The broker gives one <strong style={{ color: '#cbd5e1' }}>net qty and average price</strong> per symbol — the same stock cannot appear in two strategies in one row; overlapping strategy intent requires separate accounts or internal lot tracking (future).
+          </p>
+          {positions.length > 0 && groupPositionsByStrategy(positions).map((g) => (
+            <div key={g.slug || g.title} style={{ ...cardStyle, marginBottom: '0.75rem' }}>
+              <div style={{
+                padding: '0.5rem 0.75rem', fontSize: '0.75rem', fontWeight: 700, color: '#a5b4fc',
+                borderBottom: '1px solid #334155', background: '#0f172a',
+              }}>
+                {g.title}
+                <span style={{ marginLeft: '0.5rem', fontWeight: 500, color: '#64748b' }}>({g.rows.length})</span>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                  <thead>
+                    <tr>
+                      {['Account', 'Symbol', 'Side', 'Qty', 'Avg', 'LTP', 'P&L', 'Synced'].map(h => (
+                        <th key={h} style={thStyle}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.rows.map(p => (
+                      <tr key={p.id}>
+                        <td style={tdStyle}>{p.display_name || p.broker}</td>
+                        <td style={tdStyle}>{p.symbol}</td>
+                        <td style={{ ...tdStyle, color: p.side === 'BUY' ? '#4ade80' : '#f87171', fontWeight: 600 }}>{p.side}</td>
+                        <td style={tdStyle}>{p.quantity}</td>
+                        <td style={tdStyle}>{Number(p.avg_price).toFixed(2)}</td>
+                        <td style={tdStyle}>{p.current_price != null ? Number(p.current_price).toFixed(2) : '-'}</td>
+                        <td style={{ ...tdStyle, color: (p.unrealized_pnl || 0) >= 0 ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                          {p.unrealized_pnl != null ? Number(p.unrealized_pnl).toFixed(2) : '-'}
+                        </td>
+                        <td style={{ ...tdStyle, color: '#94a3b8', fontSize: '0.72rem' }}>{p.last_synced_at ? new Date(p.last_synced_at).toLocaleString() : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+          {positions.length === 0 && (
+            <div style={cardStyle}>
+              <div style={{ ...tdStyle, textAlign: 'center', color: '#64748b', padding: '2rem' }}>No open positions.</div>
+            </div>
+          )}
+        </div>
+      ) : tab === TAB_STRATEGIES ? (
+        <div>
+          <div style={{
+            padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: '10px',
+            background: '#0f172a', border: '1px solid #334155', fontSize: '0.78rem', color: '#94a3b8', lineHeight: 1.5,
+          }}>
+            <strong style={{ color: '#e2e8f0' }}>Universe:</strong> Most strategies use <code style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '4px' }}>screener_filtered</code> (symbols from a strategy-screener run).{' '}
+            <strong style={{ color: '#e2e8f0' }}>Same stock, multiple strategies:</strong> the broker usually nets one position per symbol; we store one tag per row. Use separate accounts or future &quot;lots&quot; to split attribution.{' '}
+            <strong style={{ color: '#e2e8f0' }}>Tracking:</strong> avg price and qty come from the broker; sync time is <code style={{ background: '#1e293b', padding: '1px 4px', borderRadius: '4px' }}>last_synced_at</code>. Entry time per strategy can be added via order history later.
+          </div>
+          <div style={cardStyle}>
+            <div style={{ padding: '0.5rem 0.75rem', fontWeight: 700, fontSize: '0.8rem', color: '#e2e8f0', borderBottom: '1px solid #334155' }}>
+              Execution strategies (catalog)
+            </div>
+            <p style={{ margin: 0, padding: '0.5rem 0.75rem', fontSize: '0.72rem', color: '#64748b', borderBottom: '1px solid #334155' }}>
+              Entry universe source per strategy. While <strong style={{ color: '#94a3b8' }}>open positions</strong> exist for a strategy,
+              universe source, screener link, and universe-related config are locked server-side (HTTP 409).
+            </p>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem' }}>
+                <thead>
+                  <tr>
+                    {['Slug', 'Name', 'Profile', 'Entry', 'Open', 'Universe source', 'Screener ID', ''].map(h => (
+                      <th key={h || 'actions'} style={thStyle}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {executionStrategies.length === 0 ? (
+                    <tr><td colSpan={8} style={{ ...tdStyle, textAlign: 'center', color: '#64748b', padding: '1.5rem' }}>No strategies (upgrade trading-service & run migrations).</td></tr>
+                  ) : executionStrategies.map(s => {
+                    const locked = (s.open_positions_count || 0) > 0;
+                    const selectVal = universeDrafts[s.id] ?? s.universe_source;
+                    const uDirty = selectVal !== s.universe_source;
+                    const scInput = screenerDrafts[s.id] !== undefined
+                      ? screenerDrafts[s.id]
+                      : (s.screener_strategy_id != null ? String(s.screener_strategy_id) : '');
+                    const curSc = s.screener_strategy_id != null ? String(s.screener_strategy_id) : '';
+                    const scT = scInput.trim();
+                    const scParsed = scT === '' ? null : parseInt(scT, 10);
+                    const scInvalid = scT !== '' && Number.isNaN(scParsed);
+                    const scDirty = screenerDrafts[s.id] !== undefined && scT !== curSc;
+                    const dirty = uDirty || scDirty;
+                    return (
+                      <tr key={s.slug}>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.7rem' }}>{s.slug}</td>
+                        <td style={tdStyle}>{s.display_name}</td>
+                        <td style={tdStyle}>{s.profile}</td>
+                        <td style={tdStyle}>{s.entry_style}</td>
+                        <td style={tdStyle}>
+                          <span title={locked ? 'Universe locked while open positions exist' : 'Open positions for this strategy'}>
+                            {s.open_positions_count || 0}
+                          </span>
+                        </td>
+                        <td style={tdStyle}>
+                          <select
+                            value={selectVal}
+                            disabled={locked || universeSavingId === s.id}
+                            onChange={e => setUniverseDrafts(d => ({ ...d, [s.id]: e.target.value }))}
+                            style={{
+                              maxWidth: '220px',
+                              fontSize: '0.72rem',
+                              padding: '0.25rem',
+                              background: '#0f172a',
+                              color: '#e2e8f0',
+                              border: '1px solid #334155',
+                              borderRadius: '6px',
+                            }}
+                          >
+                            {UNIVERSE_SOURCES.map(u => (
+                              <option key={u.value} value={u.value}>{u.label}</option>
+                            ))}
+                            {!UNIVERSE_SOURCES.some(u => u.value === selectVal) && (
+                              <option value={selectVal}>{selectVal} (current)</option>
+                            )}
+                          </select>
+                        </td>
+                        <td style={tdStyle}>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="id"
+                            value={scInput}
+                            disabled={locked || universeSavingId === s.id}
+                            onChange={e => setScreenerDrafts(d => ({ ...d, [s.id]: e.target.value }))}
+                            title="strategy-screener strategy id for /run/{id} (screener_filtered, union_screener_screen)"
+                            style={{
+                              width: '3.25rem',
+                              fontSize: '0.72rem',
+                              padding: '0.2rem 0.35rem',
+                              background: scInvalid ? 'rgba(239,68,68,0.12)' : '#0f172a',
+                              color: '#e2e8f0',
+                              border: `1px solid ${scInvalid ? '#f87171' : '#334155'}`,
+                              borderRadius: '6px',
+                              fontFamily: 'monospace',
+                            }}
+                          />
+                        </td>
+                        <td style={tdStyle}>
+                          <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              onClick={() => openUniversePreview(s)}
+                              style={{
+                                fontSize: '0.68rem',
+                                padding: '0.2rem 0.45rem',
+                                borderRadius: '6px',
+                                border: '1px solid #475569',
+                                background: '#334155',
+                                color: '#e2e8f0',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Preview
+                            </button>
+                            <button
+                              type="button"
+                              disabled={locked || !dirty || scInvalid || universeSavingId === s.id}
+                              onClick={() => saveStrategyUniverse(s)}
+                              style={{
+                                fontSize: '0.68rem',
+                                padding: '0.2rem 0.45rem',
+                                borderRadius: '6px',
+                                border: '1px solid #475569',
+                                background: dirty && !locked && !scInvalid ? '#4f46e5' : '#1e293b',
+                                color: '#e2e8f0',
+                                cursor: locked || !dirty || scInvalid ? 'not-allowed' : 'pointer',
+                                opacity: locked || !dirty || scInvalid ? 0.5 : 1,
+                              }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {universePreview && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15,23,42,0.75)',
+                zIndex: 50,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+              }}
+              onClick={() => setUniversePreview(null)}
+            >
+              <div
+                style={{
+                  background: '#1e293b',
+                  border: '1px solid #334155',
+                  borderRadius: '12px',
+                  maxWidth: '560px',
+                  width: '100%',
+                  maxHeight: '80vh',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+                onClick={e => e.stopPropagation()}
+              >
+                <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid #334155', fontWeight: 700, color: '#f1f5f9' }}>
+                  Universe preview — {universePreview.title}
+                </div>
+                <div style={{ padding: '0.75rem 1rem', overflow: 'auto', fontSize: '0.8rem', color: '#cbd5e1' }}>
+                  {universePreview.loading && <p style={{ margin: 0 }}>Loading…</p>}
+                  {universePreview.error && (
+                    <p style={{ margin: 0, color: '#f87171' }}>{universePreview.error}</p>
+                  )}
+                  {!universePreview.loading && !universePreview.error && (
+                    <>
+                      <p style={{ margin: '0 0 0.5rem', color: '#94a3b8' }}>
+                        <strong style={{ color: '#e2e8f0' }}>{universePreview.symbolCount}</strong> symbols
+                        {universePreview.truncated ? ' (list truncated in preview)' : ''}
+                      </p>
+                      {universePreview.meta && Object.keys(universePreview.meta).length > 0 && (
+                        <pre style={{
+                          margin: '0 0 0.75rem',
+                          fontSize: '0.65rem',
+                          background: '#0f172a',
+                          padding: '0.5rem',
+                          borderRadius: '8px',
+                          overflow: 'auto',
+                          color: '#94a3b8',
+                        }}
+                        >
+                          {JSON.stringify(universePreview.meta, null, 2)}
+                        </pre>
+                      )}
+                      <div style={{ fontFamily: 'monospace', fontSize: '0.72rem', lineHeight: 1.5, color: '#e2e8f0' }}>
+                        {(universePreview.symbols || []).join(', ')}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div style={{ padding: '0.5rem 1rem', borderTop: '1px solid #334155' }}>
+                  <button
+                    type="button"
+                    onClick={() => setUniversePreview(null)}
+                    style={{
+                      fontSize: '0.8rem',
+                      padding: '0.35rem 0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid #475569',
+                      background: '#334155',
+                      color: '#f1f5f9',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={{ ...cardStyle, marginTop: '1rem' }}>
+            <div style={{ padding: '0.5rem 0.75rem', fontWeight: 700, fontSize: '0.8rem', color: '#e2e8f0', borderBottom: '1px solid #334155' }}>
+              Enable strategies per account
+            </div>
+            {!accountFilter ? (
+              <p style={{ ...tdStyle, color: '#64748b', padding: '1rem' }}>Select an account above to toggle which execution strategies may trade on it.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem' }}>
+                  <thead>
+                    <tr>
+                      {['Strategy', 'Enabled', ''].map(h => (
+                        <th key={h} style={thStyle}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {accountStrategies.map(s => (
+                      <tr key={s.id}>
+                        <td style={tdStyle}>
+                          <div style={{ fontWeight: 600 }}>{s.display_name}</div>
+                          <div style={{ fontSize: '0.68rem', color: '#64748b', fontFamily: 'monospace' }}>{s.slug}</div>
+                        </td>
+                        <td style={tdStyle}>
+                          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={!!s.enabled_for_account}
+                              disabled={strategyToggleBusy === s.id}
+                              onChange={e => toggleAccountStrategy(s.id, e.target.checked)}
+                            />
+                            <span style={{ color: '#94a3b8' }}>{s.enabled_for_account ? 'On' : 'Off'}</span>
+                          </label>
+                        </td>
+                        <td style={tdStyle} />
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       ) : (
