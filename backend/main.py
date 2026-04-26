@@ -9,6 +9,7 @@ from screener_engine import (
     run_strategy_for_api, load_ohlc,
     list_symbols, INDICATOR_METADATA, get_chart_data_with_indicators,
     invalidate_cache, get_sector_overview, scan_all_patterns, scan_structural_patterns, scan_52w_high_low,
+    build_daily_universe_for_strategy,
 )
 from financials_engine import (
     get_financials_list, get_symbol_financials, get_financials_summary,
@@ -288,6 +289,27 @@ def run_strategy(
     }
 
 
+@app.get("/run/{strategy_id}/daily-universe")
+def run_strategy_daily_universe(
+    strategy_id: int,
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    max_symbols: int = Query(0, ge=0, le=5000),
+    db: Session = Depends(get_db),
+):
+    strategy = crud.get_strategy(db, strategy_id)
+    if not strategy:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return build_daily_universe_for_strategy(
+        strategy_id,
+        start_date=start_date,
+        end_date=end_date,
+        market_type=strategy.market_type,
+        timeframe=strategy.timeframe,
+        max_symbols=max_symbols,
+    )
+
+
 class AIRecommendRequest(BaseModel):
     sector_filter: Optional[str] = None
     cap_filter: Optional[str] = None
@@ -517,7 +539,7 @@ def latest_results(
     days: int = Query(7, ge=1, le=90),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    source: Optional[str] = Query("all", pattern="^(all|nse|screener\.in)$"),
+    source: Optional[str] = Query("all", pattern=r"^(all|nse|screener\.in)$"),
 ):
     return get_latest_results(days=days, page=page, page_size=page_size, source=source)
 

@@ -21,6 +21,7 @@ import hmac
 import struct
 import time
 import hashlib
+from contextlib import contextmanager
 from urllib.parse import urlparse, parse_qs
 from typing import Optional
 
@@ -29,6 +30,53 @@ import requests
 TOKEN_FILE = os.getenv("FYERS_TOKEN_FILE", os.path.join(
     os.path.dirname(__file__), "..", "data-store", "fyers_access_token.txt"
 ))
+
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "SOCKS_PROXY",
+    "SOCKS5_PROXY",
+    "socks_proxy",
+    "socks5_proxy",
+)
+
+
+@contextmanager
+def _without_proxy_env():
+    """
+    Temporarily remove proxy env vars for Fyers calls.
+
+    Cursor/local tooling may inject short-lived localhost proxies; the Fyers SDK
+    reads those env vars directly, so Session.trust_env=False is not enough for
+    every request path.
+    """
+    old_values = {key: os.environ.get(key) for key in PROXY_ENV_KEYS}
+    try:
+        for key in PROXY_ENV_KEYS:
+            os.environ.pop(key, None)
+        yield
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _direct_session() -> requests.Session:
+    """
+    Build a requests session that ignores proxy env vars.
+    Cursor / local tooling can sometimes inject temporary localhost proxies,
+    which breaks Fyers auth calls when that proxy is gone.
+    """
+    s = requests.Session()
+    s.trust_env = False
+    s.proxies.clear()
+    return s
 
 
 def generate_totp(key: str, time_step: int = 30, digits: int = 6) -> str:
@@ -73,90 +121,92 @@ def generate_fyers_token(
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     }
 
-    s = requests.Session()
+    s = _direct_session()
     s.headers.update(headers)
 
     try:
-        # Step 1: Send login OTP
-        fy_id_b64 = base64.b64encode(username.encode()).decode()
-        r1 = s.post("https://api-t2.fyers.in/vagator/v2/send_login_otp_v2",
-                     json={"fy_id": fy_id_b64, "app_id": "2"})
-        if r1.status_code != 200 or "request_key" not in r1.json():
-            return {"status": "failed", "error": f"Step 1 failed: {r1.text}"}
-        request_key = r1.json()["request_key"]
+        with _without_proxy_env():
+            # Step 1: Send login OTP
+            fy_id_b64 = base64.b64encode(username.encode()).decode()
+            r1 = s.post("https://api-t2.fyers.in/vagator/v2/send_login_otp_v2",
+                         json={"fy_id": fy_id_b64, "app_id": "2"}, timeout=30)
+            if r1.status_code != 200 or "request_key" not in r1.json():
+                return {"status": "failed", "error": f"Step 1 failed: {r1.text}"}
+            request_key = r1.json()["request_key"]
 
-        # Step 2: Verify TOTP (wait if near end of 30s window to avoid expiry mid-request)
-        if int(time.time()) % 30 > 27:
-            time.sleep(4)
-        otp = generate_totp(totp_key)
-        r2 = s.post("https://api-t2.fyers.in/vagator/v2/verify_otp",
-                     json={"request_key": request_key, "otp": int(otp)})
-        if r2.status_code != 200 or "request_key" not in r2.json():
-            return {"status": "failed", "error": f"Step 2 (TOTP verify) failed: {r2.text}"}
-        request_key = r2.json()["request_key"]
+            # Step 2: Verify TOTP (wait if near end of 30s window to avoid expiry mid-request)
+            if int(time.time()) % 30 > 27:
+                time.sleep(4)
+            otp = generate_totp(totp_key)
+            r2 = s.post("https://api-t2.fyers.in/vagator/v2/verify_otp",
+                         json={"request_key": request_key, "otp": int(otp)}, timeout=30)
+            if r2.status_code != 200 or "request_key" not in r2.json():
+                return {"status": "failed", "error": f"Step 2 (TOTP verify) failed: {r2.text}"}
+            request_key = r2.json()["request_key"]
 
-        # Step 3: Verify PIN
-        pin_b64 = base64.b64encode(str(pin).encode()).decode()
-        r3 = s.post("https://api-t2.fyers.in/vagator/v2/verify_pin_v2",
-                     json={"request_key": request_key, "identity_type": "pin", "identifier": pin_b64})
-        if r3.status_code != 200:
-            return {"status": "failed", "error": f"Step 3 (PIN verify) failed: {r3.text}"}
-        bearer_token = r3.json().get("data", {}).get("access_token")
-        if not bearer_token:
-            return {"status": "failed", "error": f"Step 3 no access_token: {r3.text}"}
+            # Step 3: Verify PIN
+            pin_b64 = base64.b64encode(str(pin).encode()).decode()
+            r3 = s.post("https://api-t2.fyers.in/vagator/v2/verify_pin_v2",
+                         json={"request_key": request_key, "identity_type": "pin", "identifier": pin_b64}, timeout=30)
+            if r3.status_code != 200:
+                return {"status": "failed", "error": f"Step 3 (PIN verify) failed: {r3.text}"}
+            bearer_token = r3.json().get("data", {}).get("access_token")
+            if not bearer_token:
+                return {"status": "failed", "error": f"Step 3 no access_token: {r3.text}"}
 
-        # Step 4: Get auth code (v3 endpoint)
-        app_id_without_suffix = client_id[:-4] if client_id.endswith("-100") else client_id
-        s.headers.update({"authorization": f"Bearer {bearer_token}"})
-        r4 = s.post("https://api-t1.fyers.in/api/v3/token", json={
-            "fyers_id": username,
-            "app_id": app_id_without_suffix,
-            "redirect_uri": redirect_uri,
-            "appType": "100",
-            "code_challenge": "",
-            "state": "None",
-            "scope": "",
-            "nonce": "",
-            "response_type": "code",
-            "create_cookie": True,
-        })
-        r4_json = r4.json()
-        auth_url = r4_json.get("Url", "")
-        if not auth_url:
-            return {"status": "failed", "error": f"Step 4 (auth code) failed (status {r4.status_code}): {r4.text}"}
+            # Step 4: Get auth code (v3 endpoint)
+            app_id_without_suffix = client_id[:-4] if client_id.endswith("-100") else client_id
+            s.headers.update({"authorization": f"Bearer {bearer_token}"})
+            r4 = s.post("https://api-t1.fyers.in/api/v3/token", json={
+                "fyers_id": username,
+                "app_id": app_id_without_suffix,
+                "redirect_uri": redirect_uri,
+                "appType": "100",
+                "code_challenge": "",
+                "state": "None",
+                "scope": "",
+                "nonce": "",
+                "response_type": "code",
+                "create_cookie": True,
+            }, timeout=30)
+            r4_json = r4.json()
+            auth_url = r4_json.get("Url", "")
+            if not auth_url:
+                return {"status": "failed", "error": f"Step 4 (auth code) failed (status {r4.status_code}): {r4.text}"}
 
-        parsed = urlparse(auth_url)
-        qs = parse_qs(parsed.query)
-        if "auth_code" not in qs:
-            return {"status": "failed", "error": f"No auth_code in redirect URL: {auth_url}"}
-        auth_code = qs["auth_code"][0]
+            parsed = urlparse(auth_url)
+            qs = parse_qs(parsed.query)
+            if "auth_code" not in qs:
+                return {"status": "failed", "error": f"No auth_code in redirect URL: {auth_url}"}
+            auth_code = qs["auth_code"][0]
 
-        # Step 5: Exchange auth code for access token
-        session_model = None
-        try:
-            from fyers_apiv3 import fyersModel
-            session_model = fyersModel.SessionModel(
-                client_id=client_id,
-                secret_key=secret_key,
-                redirect_uri=redirect_uri,
-                response_type="code",
-                grant_type="authorization_code",
-            )
-            session_model.set_token(auth_code)
-            response = session_model.generate_token()
-            if "access_token" not in response:
-                return {"status": "failed", "error": f"Step 5 (token exchange) failed: {response}"}
-            access_token_value = response["access_token"]
-        except ImportError:
-            app_id_hash = hashlib.sha256(f"{client_id}:{secret_key}".encode()).hexdigest()
-            r5 = requests.post("https://api-t1.fyers.in/api/v3/validate-authcode", json={
-                "grant_type": "authorization_code",
-                "appIdHash": app_id_hash,
-                "code": auth_code,
-            })
-            if "access_token" not in r5.json():
-                return {"status": "failed", "error": f"Step 5 (token exchange) failed: {r5.text}"}
-            access_token_value = r5.json()["access_token"]
+            # Step 5: Exchange auth code for access token
+            session_model = None
+            try:
+                from fyers_apiv3 import fyersModel
+                session_model = fyersModel.SessionModel(
+                    client_id=client_id,
+                    secret_key=secret_key,
+                    redirect_uri=redirect_uri,
+                    response_type="code",
+                    grant_type="authorization_code",
+                )
+                session_model.set_token(auth_code)
+                response = session_model.generate_token()
+                if "access_token" not in response:
+                    return {"status": "failed", "error": f"Step 5 (token exchange) failed: {response}"}
+                access_token_value = response["access_token"]
+            except ImportError:
+                app_id_hash = hashlib.sha256(f"{client_id}:{secret_key}".encode()).hexdigest()
+                fallback = _direct_session()
+                r5 = fallback.post("https://api-t1.fyers.in/api/v3/validate-authcode", json={
+                    "grant_type": "authorization_code",
+                    "appIdHash": app_id_hash,
+                    "code": auth_code,
+                }, timeout=30)
+                if "access_token" not in r5.json():
+                    return {"status": "failed", "error": f"Step 5 (token exchange) failed: {r5.text}"}
+                access_token_value = r5.json()["access_token"]
 
         # Save token
         try:
@@ -192,7 +242,8 @@ def validate_current_token() -> dict:
     client_id = os.getenv("FYERS_CLIENT_ID")
     fyers = fyersModel.FyersModel(client_id=client_id, token=token, log_path=None)
     try:
-        prof = fyers.get_profile()
+        with _without_proxy_env():
+            prof = fyers.get_profile()
         if prof and prof.get("s") == "ok":
             return {"valid": True, "profile": prof.get("data", {})}
         return {"valid": False, "error": f"Profile check failed: {prof}"}

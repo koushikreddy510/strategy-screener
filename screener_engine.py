@@ -399,6 +399,75 @@ def evaluate_condition(cond: dict, df: pd.DataFrame) -> bool:
 
     return False
 
+
+def evaluate_condition_series(cond: dict, df: pd.DataFrame) -> pd.Series:
+    """Vectorized historical condition evaluation for every row in df."""
+    indicator_type = cond["indicator_type"]
+    params = cond["params"]
+    operator = cond["operator"]
+    threshold = cond["threshold"]
+
+    try:
+        if indicator_type == "supertrend":
+            result = INDICATORS[indicator_type](df, **params)
+            series = result["supertrend_dir"] if operator == "==" else result["supertrend"]
+        elif indicator_type == "parabolic_sar":
+            result = INDICATORS[indicator_type](df, **params)
+            series = result["psar_dir"] if operator == "==" else result["psar"]
+        elif indicator_type == "vwap":
+            series = INDICATORS[indicator_type](df)
+        elif indicator_type == "macd":
+            result = INDICATORS[indicator_type](df, **params)
+            out_key = params.get("output", "macd_line")
+            series = result[out_key] if out_key in result.columns else result["macd_line"]
+        elif indicator_type == "bollinger":
+            result = INDICATORS[indicator_type](df, **params)
+            out_key = params.get("output", "bb_pct")
+            series = result[out_key] if out_key in result.columns else result["bb_pct"]
+        elif indicator_type == "stochastic":
+            result = INDICATORS[indicator_type](df, **params)
+            out_key = params.get("output", "stoch_k")
+            series = result[out_key] if out_key in result.columns else result["stoch_k"]
+        else:
+            series = INDICATORS[indicator_type](df, **params)
+
+        if series is None:
+            return pd.Series(False, index=df.index)
+
+        if "value" in threshold:
+            thresh = threshold["value"]
+        elif "field" in threshold:
+            thresh = df[threshold["field"]]
+        else:
+            thresh = series
+
+        if operator == ">":
+            out = series.astype(float) > thresh
+        elif operator == ">=":
+            out = series.astype(float) >= thresh
+        elif operator == "<":
+            out = series.astype(float) < thresh
+        elif operator == "<=":
+            out = series.astype(float) <= thresh
+        elif operator == "==":
+            if indicator_type in ("supertrend", "parabolic_sar"):
+                out = series.astype(str) == str(thresh)
+            else:
+                out = pd.Series(False, index=df.index)
+        elif operator == "cross_above":
+            prev = series.shift(1).astype(float)
+            curr = series.astype(float)
+            out = (prev <= thresh) & (curr > thresh)
+        elif operator == "cross_below":
+            prev = series.shift(1).astype(float)
+            curr = series.astype(float)
+            out = (prev >= thresh) & (curr < thresh)
+        else:
+            out = pd.Series(False, index=df.index)
+        return out.fillna(False).astype(bool)
+    except Exception:
+        return pd.Series(False, index=df.index)
+
 def compute_indicator_values(df: pd.DataFrame, conditions: list) -> Dict[str, Any]:
     values = {}
     seen_labels = set()
@@ -658,6 +727,75 @@ def run_strategy_for_api(
         "total_scanned": total_scanned,
         "total_matched": total_matched,
     }
+
+
+def build_daily_universe_for_strategy(
+    strategy_id: int,
+    *,
+    start_date: str,
+    end_date: str,
+    market_type: str = "stocks",
+    timeframe: str = "1D",
+    max_symbols: int = 0,
+) -> Dict[str, Any]:
+    """
+    Reconstruct historical day-by-day strategy matches from stored OHLCV.
+
+    This evaluates the saved screener conditions at each historical bar close.
+    The replay engine can then enter only when a symbol appears in that day's
+    universe instead of buying the latest matched list on day one.
+    """
+    conditions = load_conditions(strategy_id)
+    if not conditions:
+        return {"daily_universe": {}, "total_signal_days": 0, "symbols_seen": 0, "warning": "strategy has no conditions"}
+
+    start_ts = pd.Timestamp(start_date[:10])
+    end_ts = pd.Timestamp(end_date[:10])
+    if end_ts < start_ts:
+        return {"daily_universe": {}, "total_signal_days": 0, "symbols_seen": 0, "warning": "end_date before start_date"}
+
+    cache_raw = f"daily:{strategy_id}:{start_date[:10]}:{end_date[:10]}:{market_type}:{timeframe}:{max_symbols}"
+    cache_key = hashlib.md5(cache_raw.encode()).hexdigest()
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    all_symbols = list_symbols(market_type)
+    daily: Dict[str, List[str]] = {}
+    symbols_seen = set()
+
+    for sym in all_symbols:
+        df = load_ohlc(sym, market_type, timeframe)
+        if df.empty or len(df) < 5:
+            continue
+        df = df.sort_index()
+        df = df[df.index <= end_ts]
+        if df.empty:
+            continue
+
+        combined = pd.Series(True, index=df.index)
+        for cond in conditions:
+            combined = combined & evaluate_condition_series(cond, df)
+        combined = combined[(combined.index >= start_ts) & (combined.index <= end_ts)]
+        for idx, matched in combined.items():
+            if not bool(matched):
+                continue
+            ds = str(idx.date() if hasattr(idx, "date") else idx)[:10]
+            day_list = daily.setdefault(ds, [])
+            if max_symbols <= 0 or len(day_list) < max_symbols:
+                day_list.append(sym)
+                symbols_seen.add(sym)
+
+    out = {
+        "daily_universe": dict(sorted(daily.items())),
+        "total_signal_days": len(daily),
+        "symbols_seen": len(symbols_seen),
+        "strategy_id": strategy_id,
+        "start_date": start_date[:10],
+        "end_date": end_date[:10],
+    }
+    _set_cache(cache_key, out)
+    return out
 
 def invalidate_cache(strategy_id: int = None):
     """Clear cache for a strategy or all."""

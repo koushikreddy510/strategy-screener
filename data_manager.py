@@ -279,9 +279,22 @@ def _update_financials_job(mode: str = "incremental", limit: int = 0):
 
     SCREENER_BASE = "https://www.screener.in/company"
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-        "Accept": "text/html,application/xhtml+xml",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.screener.in/",
+        "sec-ch-ua": '"Brave";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
     }
+    REQUEST_DELAY = float(os.getenv("SCREENER_FINANCIALS_REQUEST_DELAY_SEC", os.getenv("SCREENER_REQUEST_DELAY_SEC", "3")))
+    MAX_429_RETRIES = int(os.getenv("SCREENER_FINANCIALS_MAX_429_RETRIES", "4"))
+    BACKOFF_SEC = int(os.getenv("SCREENER_FINANCIALS_BACKOFF_SEC", "30"))
+
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE stock_financials ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'screener.in'"))
+        conn.commit()
 
     with engine.connect() as conn:
         symbols = [r for r in conn.execute(text(
@@ -322,9 +335,15 @@ def _update_financials_job(mode: str = "incremental", limit: int = 0):
 
     total = len(symbols)
     session = rq.Session()
+    session.trust_env = False
     session.headers.update(HEADERS)
+    cookie_str = os.getenv("SCREENER_SESSION_COOKIE", "").strip()
+    if cookie_str:
+        session.headers["Cookie"] = cookie_str
     success = 0
     failed = 0
+    skipped = 0
+    rate_limited = 0
 
     sys.path.insert(0, DATA_STORE_DIR)
     try:
@@ -354,9 +373,38 @@ def _update_financials_job(mode: str = "incremental", limit: int = 0):
             if "financials" in _running_jobs:
                 _running_jobs["financials"]["progress"] = f"[{i}/{total}] {nse_sym}"
         try:
-            data = scrape_symbol(session, nse_sym)
+            data = None
+            for attempt in range(MAX_429_RETRIES + 1):
+                data = scrape_symbol(session, nse_sym)
+                if not (data and data.get("rate_limited")):
+                    break
+                rate_limited += 1
+                wait_sec = BACKOFF_SEC * (attempt + 1)
+                with _job_lock:
+                    if "financials" in _running_jobs:
+                        _running_jobs["financials"]["progress"] = (
+                            f"[{i}/{total}] {nse_sym} rate-limited by Screener.in; "
+                            f"retrying in {wait_sec}s"
+                        )
+                time.sleep(wait_sec)
+
+            if data and data.get("rate_limited"):
+                failed += 1
+                time.sleep(REQUEST_DELAY)
+                continue
+            if data and data.get("login_required"):
+                failed += 1
+                with _job_lock:
+                    if "financials" in _running_jobs:
+                        _running_jobs["financials"]["progress"] = (
+                            "Screener.in company pages require login; set SCREENER_SESSION_COOKIE "
+                            "from a logged-in browser session."
+                        )
+                time.sleep(REQUEST_DELAY)
+                continue
             if not data or (len(data.get("quarterly", [])) == 0 and len(data.get("annual", [])) == 0):
-                time.sleep(1)
+                skipped += 1
+                time.sleep(REQUEST_DELAY)
                 continue
 
             db_cfg = _parse_db_url(DATABASE_URL)
@@ -384,14 +432,18 @@ def _update_financials_job(mode: str = "incremental", limit: int = 0):
                         pass
 
             success += 1
-        except Exception:
+        except Exception as e:
             failed += 1
-        time.sleep(1)
+            with _job_lock:
+                if "financials" in _running_jobs:
+                    _running_jobs["financials"]["progress"] = f"[{i}/{total}] {nse_sym} failed: {e}"
+        time.sleep(REQUEST_DELAY)
 
     with _job_lock:
         if "financials" in _running_jobs:
             _running_jobs["financials"]["progress"] = (
-                f"Done: {success} OK, {failed} failed out of {total}. "
+                f"Done: {success} OK, {skipped} skipped, {failed} failed out of {total}. "
+                f"{rate_limited} rate-limit responses. "
                 f"{announcements_added} result announcements added."
             )
 

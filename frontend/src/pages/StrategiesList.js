@@ -65,6 +65,11 @@ export default function StrategiesList() {
     navigate(`/run/${strategyId}?scan_days=${scanDays}`);
   };
 
+  const backtestUrl = (strategyId) => {
+    const scanDays = selectedScanDays[strategyId] || 0;
+    return `/backtest?strategy_id=${strategyId}&scan_days=${scanDays}`;
+  };
+
   const marketLabel = marketType === 'commodities' ? 'Commodities' : 'Stocks';
 
   if (loading) return (
@@ -157,38 +162,49 @@ export default function StrategiesList() {
               }}>No conditions — <Link to={`/strategies/${s.id}/conditions`} style={{ color: '#818cf8', textDecoration: 'none' }}>add some</Link></div>
             )}
 
-            <div style={{ display: 'flex', gap: '0.35rem', marginTop: 'auto' }}>
-              <select
-                value={selectedScanDays[s.id] || 0}
-                onChange={(e) => setSelectedScanDays({ ...selectedScanDays, [s.id]: parseInt(e.target.value) })}
-                style={{
-                  flex: 'none', width: 'auto', padding: '0.4rem 0.5rem', fontSize: '0.75rem',
-                  background: '#0f172a', border: '1px solid #334155', color: '#94a3b8', borderRadius: '6px',
-                }}
-              >
-                <option value={0}>Latest</option>
-                <option value={7}>7d scan</option>
-                <option value={30}>30d scan</option>
-              </select>
-              <button onClick={() => handleRunScreen(s.id)} disabled={s.conditions.length === 0} style={{
-                flex: 1, fontSize: '0.8rem', padding: '0.45rem', borderRadius: '8px', fontWeight: 600,
-                background: s.conditions.length > 0 ? '#6366f1' : '#334155',
-                color: s.conditions.length > 0 ? 'white' : '#475569',
-                border: 'none', cursor: s.conditions.length > 0 ? 'pointer' : 'default',
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: 'auto' }}>
+              <div style={{ display: 'flex', gap: '0.35rem' }}>
+                <select
+                  value={selectedScanDays[s.id] || 0}
+                  onChange={(e) => setSelectedScanDays({ ...selectedScanDays, [s.id]: parseInt(e.target.value) })}
+                  style={{
+                    flex: 'none', width: 'auto', padding: '0.4rem 0.5rem', fontSize: '0.75rem',
+                    background: '#0f172a', border: '1px solid #334155', color: '#94a3b8', borderRadius: '6px',
+                  }}
+                >
+                  <option value={0}>Latest</option>
+                  <option value={7}>7d scan</option>
+                  <option value={30}>30d scan</option>
+                </select>
+                <button onClick={() => handleRunScreen(s.id)} disabled={s.conditions.length === 0} style={{
+                  flex: 1, fontSize: '0.8rem', padding: '0.45rem', borderRadius: '8px', fontWeight: 600,
+                  background: s.conditions.length > 0 ? '#6366f1' : '#334155',
+                  color: s.conditions.length > 0 ? 'white' : '#475569',
+                  border: 'none', cursor: s.conditions.length > 0 ? 'pointer' : 'default',
+                  opacity: s.conditions.length > 0 ? 1 : 0.5,
+                }}>
+                  ▶ Run Screen
+                </button>
+                <Link to={`/strategies/${s.id}/edit`} style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  padding: '0.45rem 0.65rem', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 600,
+                  background: '#334155', border: '1px solid #475569', color: '#94a3b8', textDecoration: 'none',
+                }}>Edit</Link>
+                <button onClick={() => handleDelete(s.id)} style={{
+                  padding: '0.45rem 0.55rem', borderRadius: '8px', fontSize: '0.7rem',
+                  background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                  color: '#f87171', cursor: 'pointer',
+                }}>✕</button>
+              </div>
+              <Link to={backtestUrl(s.id)} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                padding: '0.48rem 0.65rem', borderRadius: '8px', fontSize: '0.8rem', fontWeight: 700,
+                background: '#0f766e', border: '1px solid #14b8a6', color: '#ccfbf1', textDecoration: 'none',
                 opacity: s.conditions.length > 0 ? 1 : 0.5,
+                pointerEvents: s.conditions.length > 0 ? 'auto' : 'none',
               }}>
-                ▶ Run Screen
-              </button>
-              <Link to={`/strategies/${s.id}/edit`} style={{
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                padding: '0.45rem 0.65rem', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 600,
-                background: '#334155', border: '1px solid #475569', color: '#94a3b8', textDecoration: 'none',
-              }}>Edit</Link>
-              <button onClick={() => handleDelete(s.id)} style={{
-                padding: '0.45rem 0.55rem', borderRadius: '8px', fontSize: '0.7rem',
-                background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-                color: '#f87171', cursor: 'pointer',
-              }}>✕</button>
+                Backtest this screener output
+              </Link>
             </div>
           </div>
         ))}

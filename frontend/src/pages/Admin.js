@@ -257,7 +257,7 @@ export default function Admin() {
       <div style={cardStyle}>
         <div style={sectionTitle}>Financial Results (screener.in)</div>
         <p style={{ color: '#64748b', fontSize: '0.8rem', margin: '0 0 0.75rem' }}>
-          <strong>Scrape Latest Announcements Only</strong> — fills financials for symbols that announced recently (run Latest Results scraper first). <strong>Incremental</strong> skips last 7 days. <strong>Full</strong> scrapes all. Rate-limited (~1 req/sec). Job state resets on server restart.
+          <strong>Scrape Latest Announcements Only</strong> — fills financials for symbols that announced recently (run Latest Results scraper first). <strong>Incremental</strong> skips last 7 days. <strong>Full</strong> scrapes all. Uses <code>SCREENER_SESSION_COOKIE</code> when set and backs off on 429 rate limits. Job state resets on server restart.
           {(!status || (fin.symbols_with_data || 0) === 0) && (
             <span style={{ display: 'block', color: '#fbbf24', marginTop: '0.5rem' }}>
               ⚠ No financial data yet — Latest Results and AI report will show nulls until you run this.
@@ -277,7 +277,7 @@ export default function Admin() {
         <div style={sectionTitle}>Latest Result Announcements (NSE)</div>
         <p style={{ color: '#64748b', fontSize: '0.8rem', margin: '0 0 0.75rem' }}>
           Fetches financial result announcements from NSE Corporate Announcements API. These show up in the
-          "Latest Results" tab on the Financials page. Pick a lookback window.
+          "Latest Results" tab on the Financials page. NSE gives announcement metadata, not revenue/profit tables; run the Screener.in financial scraper to fill financial values.
         </p>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           <button onClick={() => doAction('/admin/scrape-latest-results', 'days=7')} style={btnPrimary}>Last 7 Days</button>

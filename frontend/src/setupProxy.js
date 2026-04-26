@@ -6,10 +6,13 @@
  */
 const { createProxyMiddleware } = require('http-proxy-middleware');
 
+// http-proxy-middleware v2+ does not accept RegExp as context (only string, glob, array, or function).
+const BACKEND_PREFIX = /^(?:\/strategies|\/run|\/indicators|\/ohlc|\/chart|\/sectors|\/patterns|\/financials|\/conditions|\/admin)(?:\/|$|\?)/;
+
 module.exports = function (app) {
   app.use(
     createProxyMiddleware(
-      /^\/(strategies|run|indicators|ohlc|chart|sectors|patterns|financials|conditions|admin)/,
+      (pathname) => BACKEND_PREFIX.test(pathname),
       {
         target: 'http://localhost:8000',
         changeOrigin: true,
