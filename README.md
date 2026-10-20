@@ -1050,3 +1050,163 @@ Professional screeners
 ✔️ This gives you correct, stable, realistic signals
 
 If you want, next I can show you exactly how this looks in code in the screener engine (with EMA/RSI/Supertrend) so you can see this pattern in practice.
+
+---
+
+# Local-First EOD Screener Roadmap
+
+This section extends the original design above. The goal is a local, end-of-day NSE screener that finds newly emerging 1D and 1W setups, creates a review queue after market close, and only passes explicitly approved candidates to the trading system for the next session.
+
+> A screener match is research, not a buy recommendation. A live order must pass explicit approval and risk controls.
+
+## Architecture and language choice
+
+Python is suitable for the screener and should remain the primary implementation language. The job is batch-oriented and data-heavy: OHLCV ingestion, Pandas/NumPy calculations, indicator evaluation, pattern detection, backtests, ranking, and a FastAPI API. A full NSE daily universe is small enough to evaluate locally after market close.
+
+Use the existing stack:
+
+```text
+PostgreSQL (local)    symbols, OHLCV, financials, strategies, run history
+Python / FastAPI      data ingestion, validation, indicators, screen runs, APIs
+React                 strategy builder, charts, results, daily review queue
+trading-service       approved signals, positions, risk rules, broker order routing
+trade / Atlas (Go)    optional independent execution runtime / broker lifecycle work
+```
+
+There is no value in rewriting this screener in Go now. Keep Go for a continuously running or low-latency execution component if Atlas evolves in that direction. Before changing language, profile the daily scan; optimize database access and cache/precompute indicators first.
+
+## Local data model
+
+Screen evaluation should never depend on a live external API. Fetch data after close, store it locally, validate it, then evaluate only the local database.
+
+| Data | Local storage | Purpose | Refresh |
+|---|---|---|---|
+| NSE universe | `symbols` | instrument master, sector, liquidity filters | daily/weekly |
+| Daily OHLCV | `ohlcv_1d` | all stock 1D screens | after every market close |
+| Weekly OHLCV | derived locally from daily candles | 1W screens | on every EOD run |
+| Financials/results | `stock_financials`, result tables | quality/event filters | incremental daily, full periodic |
+| Benchmarks | new NIFTY/sector index OHLCV tables | regime and relative strength | daily |
+| Screen snapshots | new tables below | audit, diffs, forward testing | every run |
+
+Fyers is the current OHLCV ingestion provider in this repository. Keep that provider behind the ingestion boundary so it can later be replaced with a licensed vendor or official exchange files without changing any screen definition.
+
+## EOD workflow
+
+Only run on finalized candles. The current scheduler configuration refreshes stocks at `13:00 IST` and runs candidate scans at `09:25 IST`; it needs to be changed to match this next-day workflow.
+
+```text
+15:45  Refresh final daily OHLCV after the provider publishes the closed candle
+16:00  Validate data completeness, duplicates, nulls, and latest trading date
+16:05  Build weekly candles / indicators from the local daily data
+16:10  Run every active 1D and 1W strategy
+16:15  Rank, deduplicate, snapshot, and diff against the prior completed run
+16:20  Publish Daily Opportunities and optional Slack digest
+Next day 09:15–09:25  Place only approved candidates, subject to price-gap and risk guards
+```
+
+Weekly strategies need two explicit modes:
+
+- `completed_week`: last Friday-closed weekly candle only; default for reproducible signals and backtests.
+- `week_to_date`: current partial weekly candle; label as provisional and never silently mix with completed-week results.
+
+If EOD data is incomplete, fail closed: save a blocked run, retain the prior successful run, and do not generate an order queue.
+
+## Durable screen history
+
+Add the following before allowing screen results to flow toward orders:
+
+```text
+screener_runs
+  id, started_at, completed_at, status, data_as_of, timeframe,
+  universe_version, engine_version, strategy_version
+
+screener_run_matches
+  run_id, strategy_id, symbol, matched, score, rank,
+  metrics_json, reasons_json, data_as_of
+
+strategy_versions
+  id, strategy_id, version, definition_json, activated_at
+
+candidate_decisions
+  run_match_id, status [new|watch|approved|rejected|ordered|expired],
+  notes, reviewer, decided_at, execution_strategy_id
+```
+
+This preserves exactly what matched, why it matched, and which strategy version created the result. It enables daily “new/continuing/disappeared” views and forward performance tracking without look-ahead bias.
+
+## Improvements to the condition engine
+
+- Add indicator-to-indicator operands: `EMA20 > EMA50`, MACD line crossing MACD signal.
+- Add derived values: rolling high/low, return, EMA slope, distance from 52-week high, ATR %, relative volume, drawdown, and benchmark/sector relative strength.
+- Add logical condition groups: `all`, `any`, `not`, and `at_least_n_of`.
+- Add event rules: crossing within N bars, first breakout after a consolidation, or holding above/below a value for N bars.
+- Add universe filters: NSE EQ only, price, average traded value, market cap, sector, and exclusion lists.
+- Add scoring factors as well as binary match rules.
+
+The seeded `MACD Crossover Buy` rule currently means MACD crossing above **zero**. Keep it as a valid rule, but add a separate MACD-line-crosses-signal-line rule; they are different setups.
+
+## Daily Opportunities
+
+Create a page that combines the completed screen runs rather than showing isolated strategy result tables. It should show the symbol, score/rank, 1D and 1W setup, liquidity, sector, exact match reasons, chart, new/continuing status, confirming/conflicting screens, and actions to mark a candidate `watch`, `approved`, or `rejected`.
+
+Use a deterministic score before review:
+
+```text
+30% weekly trend alignment
+25% setup / breakout quality
+20% relative strength versus benchmark and sector
+15% volume confirmation
+10% liquidity and risk penalty
+```
+
+AI can summarize context, but it must not be the sole source of a signal or an order decision.
+
+## Screen templates to build first
+
+| Family | High-value examples |
+|---|---|
+| Trend | EMA20/50/200 alignment, rising EMA50, Supertrend flip |
+| Breakout | 20/55/100-day high, 52-week high proximity, Donchian/swing-high breakout |
+| Pullback | weekly uptrend plus daily EMA20/50 pullback; RSI dip/recovery |
+| Momentum | RSI 50 reclaim, MACD signal cross, 1W/1M relative strength |
+| Volume/volatility | relative volume surge, Bollinger squeeze, ATR contraction, NR7 |
+| Reversal/structure | failed breakdown, divergence, flags, triangles, cup-and-handle |
+| Sector/fundamentals | sector leader, ROCE/ROE, profit/revenue growth, debt and result filters |
+| Avoid rules | illiquidity, extended price, earnings proximity, weak regime, sector crowding |
+
+Start with these six: weekly-trend/daily-breakout; weekly-trend/daily-pullback; 52-week-high continuation; Bollinger/ATR compression breakout; sector-leader momentum; and failed-breakdown reversal in a non-bearish weekly trend.
+
+## Incremental delivery plan
+
+### Phase 0 — reliability
+
+1. Correct the post-close schedule and data-quality gates.
+2. Fix the chart UI so stock 1W strategies can be viewed on a 1W chart.
+3. Add MACD-signal crossover separately from zero-line crossover.
+
+### Phase 1 — reproducibility
+
+1. Add screen-run, match, and strategy-version migrations.
+2. Persist every active screener run; add run history and daily diffs.
+3. Add CSV export and a scheduler job for all active screens.
+
+### Phase 2 — discovery
+
+1. Add derived metrics, operand comparison, and logical groups.
+2. Seed the six starter screen templates and ranking.
+3. Build Daily Opportunities, watchlist, and approval actions.
+
+### Phase 3 — validation and execution
+
+1. Measure 1/3/5/10/20-session forward results per strategy version.
+2. Send only approved candidates to `trading-service`.
+3. Enforce sizing, stop-loss source, max positions, sector caps, gap tolerance, idempotency, paper mode, and a kill switch before any live order.
+
+## Guiding rules
+
+- PostgreSQL is the local source of truth; APIs are derived views.
+- Version every strategy and persist every completed run.
+- Never label a partial candle as final.
+- Use the same evaluator for backtests and live-like runs.
+- Separate research signals from risk and execution decisions.
+- Fail closed when data is stale or incomplete.
