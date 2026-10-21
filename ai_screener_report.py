@@ -268,7 +268,7 @@ def post_to_slack(
     today_str: str,
 ) -> bool:
     """Post formatted report to Slack. Returns True on success."""
-    webhook = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+    webhook = (os.getenv("SLACK_DATA_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_URL", "")).strip()
     if not webhook:
         return False
 

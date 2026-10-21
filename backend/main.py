@@ -565,7 +565,7 @@ def run_slack(
     """Post screener run results to Slack. Set SLACK_WEBHOOK_URL in .env."""
     import os as _os
     import requests as _rq
-    webhook = _os.getenv("SLACK_WEBHOOK_URL", "").strip()
+    webhook = (_os.getenv("SLACK_DATA_WEBHOOK_URL") or _os.getenv("SLACK_WEBHOOK_URL", "")).strip()
     if not webhook:
         raise HTTPException(status_code=400, detail="SLACK_WEBHOOK_URL not set in .env")
 
