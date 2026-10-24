@@ -261,7 +261,7 @@ def load_conditions(strategy_id: int):
         conditions.append(cond)
     return conditions
 
-def load_ohlc(symbol: str, market_type: str = "stocks", timeframe: str = "1D") -> pd.DataFrame:
+def load_ohlc(symbol: str, market_type: str = "stocks", timeframe: str = "1D", bars: Optional[int] = None) -> pd.DataFrame:
     """Load OHLC. For stocks+1W, resamples from 1D (broker provides 1D only; 1W = aggregated)."""
     if market_type == "stocks" and timeframe == "1W":
         df = load_ohlc(symbol, market_type, "1D")
@@ -277,12 +277,19 @@ def load_ohlc(symbol: str, market_type: str = "stocks", timeframe: str = "1D") -
     info = _get_table_info(market_type, timeframe)
     table = info["table"]
     dt_col = info["dt_col"]
-    sql = f"""
-    SELECT {dt_col}, open, high, low, close, volume
-      FROM {table}
-     WHERE tradingsymbol = :sym
-  ORDER BY {dt_col};
-    """
+    if bars:   # only the newest `bars` rows: a scan needs ~1 year, the table holds 4 and the server is small
+        sql = f"""
+        SELECT * FROM (SELECT {dt_col}, open, high, low, close, volume FROM {table}
+                        WHERE tradingsymbol = :sym ORDER BY {dt_col} DESC LIMIT {int(bars)}) t
+      ORDER BY {dt_col};
+        """
+    else:
+        sql = f"""
+        SELECT {dt_col}, open, high, low, close, volume
+          FROM {table}
+         WHERE tradingsymbol = :sym
+      ORDER BY {dt_col};
+        """
     with engine.connect() as conn:
         df = pd.read_sql(text(sql), conn, params={"sym": symbol}, index_col=dt_col, parse_dates=[dt_col])
     return df
@@ -644,6 +651,9 @@ def _build_stock_entry(
     }
 
 
+SCAN_BARS = 500   # ~2 years of daily bars: enough for EMA 200 and supertrend to settle
+
+
 def run_strategy_for_api(
     strategy_id: int,
     scan_days: Optional[int] = None,
@@ -665,7 +675,7 @@ def run_strategy_for_api(
         all_entries = []
 
         for sym in all_symbols:
-            df = load_ohlc(sym, market_type, timeframe)
+            df = load_ohlc(sym, market_type, timeframe, bars=SCAN_BARS if timeframe == "1D" else None)
             if df.empty or len(df) < 5:
                 continue
 
