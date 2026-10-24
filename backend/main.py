@@ -204,6 +204,7 @@ def run_strategy(
     cap_filter: Optional[str] = None,
     sector_filter: Optional[str] = None,
     matched_only: bool = True,
+    with_financials: bool = True,   # the strategy sync only needs symbols: False skips re-reading financials for every match on every page
     db: Session = Depends(get_db),
 ):
     strategy = crud.get_strategy(db, strategy_id)
@@ -233,7 +234,7 @@ def run_strategy(
             all_matches = [m for m in all_matches if m.get("sector", "") == sector_filter]
 
     total = len(all_matches)
-    include_financials = strategy.market_type == "stocks" and total >= 10
+    include_financials = with_financials and strategy.market_type == "stocks" and total >= 10
 
     # Enrich all matches with financials before sorting (so sort by revenue etc. works)
     if include_financials and all_matches:
